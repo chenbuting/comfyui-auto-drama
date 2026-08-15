@@ -3330,6 +3330,17 @@ class Handler(BaseHTTPRequestHandler):
             files.sort(key=lambda x: x["mtime"], reverse=True)
             self._send(200, json.dumps({"history": files}, ensure_ascii=False))
             return
+        if path.path == "/api/task":
+            """返回任务完整详情（重新生成配置弹窗用）。"""
+            qs = urllib.parse.parse_qs(path.query)
+            task_id = qs.get("task_id", [""])[0]
+            st = load_state()
+            t = next((x for x in st.get("tasks", []) if x.get("id") == task_id), None)
+            if not t:
+                self._send(404, json.dumps({"error": "任务不存在"}, ensure_ascii=False))
+                return
+            self._send(200, json.dumps({"task": t}, ensure_ascii=False))
+            return
         if path.path == "/api/llm_check":
             self._send(200, json.dumps(check_lmstudio(), ensure_ascii=False))
             return
@@ -4057,7 +4068,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"deleted": True, "task_id": task_id}, ensure_ascii=False))
             return
         if path == "/api/regenerate":
-            """用原任务的提示词/参考图/参数重新生成一版（新任务自动加 _vN 后缀）。"""
+            """用原任务重新生成一版；body 可覆盖 prompt/quality/steps/mp。
+            参考图/时长/模式沿用原任务；链式为单段重跑（不自动链式）。"""
             task_id = str(body.get("task_id") or "")
             st = load_state()
             t = next((x for x in st.get("tasks", []) if x.get("id") == task_id), None)
@@ -4069,15 +4081,15 @@ class Handler(BaseHTTPRequestHandler):
                 "name": str(t.get("name") or t["id"]),
                 "mode": t.get("mode"),
                 "duration": t.get("duration"),
-                "mp": t.get("mp"),
+                "mp": body.get("mp", t.get("mp")),
                 "prefix": t.get("prefix"),
                 "image": t.get("image"),
                 "images": t.get("images") or [],
                 "story_image": t.get("story_image"),
                 "ref_video": t.get("ref_video"),
-                "prompt": t.get("prompt", ""),
-                "quality": t.get("quality"),
-                "steps": t.get("steps"),
+                "prompt": str(body.get("prompt") or t.get("prompt") or "").strip(),
+                "quality": body.get("quality", t.get("quality")),
+                "steps": body.get("steps", t.get("steps")),
             }
             server = st.get("server") or DEFAULT_SERVER
             results, err = submit_tasks(server, [new_task], auto_download=True, chain_mode=False)
