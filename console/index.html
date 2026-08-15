@@ -1324,6 +1324,8 @@ async function submit() {
   finally { btn.disabled = false; btn.textContent = '🚀 提交任务'; }
 }
 
+let statusShowAll = false;
+let statusTasksCache = [];
 function pill(status) {
   const map = {queued: '排队中', running: '生成中', completed: '已完成', error: '失败', waiting: '等待上段'};
   return `<span class="pill ${status}">${map[status] || status}</span>`;
@@ -1337,13 +1339,23 @@ async function refreshStatus() {
     const d = await r.json();
     if (!d.server_ok) { $('statusCards').innerHTML = '<div class="empty">⚠️ 服务器连接异常</div>'; return; }
     if (!d.tasks.length) { $('statusCards').innerHTML = '<div class="empty"><div class="big">🎬</div>还没有任务，提交后这里显示状态</div>'; return; }
-    $('statusCards').innerHTML = `<div class="cards">${d.tasks.map(t => {
+    statusTasksCache = d.tasks;
+    renderStatusCards();
+  } catch (e) { $('statusCards').innerHTML = '<div class="empty">状态刷新失败</div>'; }
+}
+
+function renderStatusCards() {
+  const tasks = statusTasksCache;
+  if (!tasks.length) return;
+  const activeN = tasks.filter(t => ['running', 'queued', 'waiting'].includes(t.status)).length;
+  const show = statusShowAll ? tasks : tasks.slice(0, Math.max(activeN, 8));
+  $('statusCards').innerHTML = `<div class="cards">${show.map(t => {
       const active = ['running', 'queued', 'waiting'].includes(t.status);
       const spin = active ? '<span class="spin"></span>' : '';
       const outs = (t.outputs || []).map(o => {
         const isVideo = /\.(mp4|webm|mov)$/i.test(o.filename || '');
         const vid = (isVideo && t.downloaded)
-          ? `<video src="/media/${encodeURIComponent(o.filename)}" controls preload="metadata" style="width:100%;border-radius:8px;margin-top:6px;background:#000"></video>`
+        ? `<video src="/media/${encodeURIComponent(o.filename)}" controls preload="none" style="width:100%;border-radius:8px;margin-top:6px;background:#000"></video>`
           : '';
         const dl = (isVideo && !t.downloaded)
           ? ` <a href="/media/${encodeURIComponent(o.filename)}" download style="color:var(--blue)">下载预览</a>`
@@ -1363,8 +1375,12 @@ async function refreshStatus() {
       return `<div class="card-item${active ? ' generating' : ''}"><div class="r1"><span class="name">${esc(t.name)}</span><span style="display:flex;align-items:center;gap:7px">${spin}${pill(t.status)}</span></div>
         <div class="meta">${t.mode.toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}</div>${outs}${err}
         <div class="row" style="margin-top:8px">${regen}${del}</div></div>`;
-    }).join('')}</div>`;
-  } catch (e) { $('statusCards').innerHTML = '<div class="empty">状态刷新失败</div>'; }
+    }).join('')}</div>`
+    + (tasks.length > show.length
+      ? `<div style="text-align:center;margin-top:10px">
+           <button class="btn" onclick="statusShowAll=!statusShowAll;renderStatusCards()">${statusShowAll ? '▲ 收起历史版本' : `▼ 显示全部 ${tasks.length} 个任务（含历史版本）`}</button>
+         </div>`
+      : '');
 }
 function startPoll() {
   clearInterval(pollTimer);
@@ -1471,7 +1487,7 @@ async function assemble() {
           btn.disabled = false;
           loadAssembleHistory();
           $('assembleResult').innerHTML = `
-            <video src="/media/${encodeURIComponent(pd.filename)}" controls preload="metadata" style="width:100%;max-height:480px;border-radius:10px;background:#000"></video>
+            <video src="/media/${encodeURIComponent(pd.filename)}" controls preload="none" style="width:100%;max-height:480px;border-radius:10px;background:#000"></video>
             <div class="hint" style="margin-top:8px">✅ ${esc(pd.filename)}
               <a href="/media/${encodeURIComponent(pd.filename)}" download style="color:var(--blue)">下载</a></div>`;
           toast('🎬 合成完成');
@@ -1534,19 +1550,35 @@ async function loadAssembleHistory() {
     const r = await fetch('/api/assemble_history');
     const d = await r.json();
     const files = d.history || [];
-    box.innerHTML = files.length
-      ? `<div class="cards">${files.map(f => `
+    histCache = files;
+    renderAssembleHistory();
+  } catch (e) { box.innerHTML = '<div class="hint">历史加载失败</div>'; }
+}
+
+let histShowAll = false;
+let histCache = [];
+function renderAssembleHistory() {
+  const box = $('assembleHistory');
+  if (!box) return;
+  const files = histCache || [];
+  const show = histShowAll ? files : files.slice(0, 6);
+  box.innerHTML = files.length
+      ? `<div class="cards">${show.map(f => `
           <div class="card-item">
             <div class="r1"><span class="name" style="font-size:12px">${esc(f.filename)}</span></div>
             <div class="meta">${esc(f.mtime)} · ${(f.size / 1048576).toFixed(1)}MB</div>
-            <video src="/media/${encodeURIComponent(f.filename)}" controls preload="metadata" style="width:100%;border-radius:8px;max-height:220px;background:#000"></video>
+            <video src="/media/${encodeURIComponent(f.filename)}" controls preload="none" style="width:100%;border-radius:8px;max-height:220px;background:#000"></video>
             <div class="row" style="margin-top:6px">
               <a href="/media/${encodeURIComponent(f.filename)}" download style="color:var(--blue);font-size:12px">⬇️ 下载</a>
               <button class="btn" style="padding:3px 8px;font-size:11px;color:var(--red)" onclick="deleteAssembled('${escAttr(f.filename)}')">🗑️ 删除</button>
             </div>
           </div>`).join('')}</div>`
+        + (files.length > show.length
+          ? `<div style="text-align:center;margin-top:10px">
+               <button class="btn" onclick="histShowAll=!histShowAll;renderAssembleHistory()">${histShowAll ? '▲ 收起' : `▼ 加载更多（共 ${files.length} 个合成视频）`}</button>
+             </div>`
+          : '')
       : '<div class="hint">还没有合成记录，点「一键合成」生成第一版</div>';
-  } catch (e) { box.innerHTML = '<div class="hint">历史加载失败</div>'; }
 }
 
 async function deleteVideo(taskId) {
