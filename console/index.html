@@ -612,6 +612,18 @@
   </div>
 </div>
 
+<!-- 通用确认弹窗（替代浏览器 confirm，兼容内嵌浏览器） -->
+<div class="modal-bg" id="confirmModalBg">
+  <div class="modal" style="width:min(440px,90vw)">
+    <h3>⚠️ 请确认</h3>
+    <div id="confirmMsg" style="font-size:14px;color:var(--muted);margin:8px 0 18px;line-height:1.6"></div>
+    <div class="row" style="justify-content:flex-end;gap:10px">
+      <button class="btn" id="btnConfirmCancel">取消</button>
+      <button class="btn" style="color:var(--red)" id="btnConfirmOk">确定</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -1478,44 +1490,65 @@ async function loadAssembleHistory() {
 }
 
 async function deleteVideo(taskId) {
-  if (!confirm('确定删除这个任务的视频文件吗？删除后可重新生成。')) return;
-  try {
-    const r = await fetch('/api/delete_video', {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({task_id: taskId}),
-    });
-    const d = await r.json();
-    if (!r.ok) { toast(d.error || '删除失败', true); return; }
-    toast('🗑️ 视频已删除');
-    refreshStatus();
-    loadAssembleHistory();
-  } catch (e) { toast('删除失败：' + e.message, true); }
+  askConfirm('确定删除这个任务的视频文件吗？删除后可重新生成。', async () => {
+    try {
+      const r = await fetch('/api/delete_video', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({task_id: taskId}),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error || '删除失败', true); return; }
+      toast('🗑️ 视频已删除');
+      refreshStatus();
+      loadAssembleHistory();
+    } catch (e) { toast('删除失败：' + e.message, true); }
+  });
 }
 
 async function regenerateVideo(taskId) {
-  if (!confirm('用该任务的提示词/参考图/参数重新生成一版吗？会作为新版本提交。')) return;
-  try {
-    const r = await fetch('/api/regenerate', {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({task_id: taskId}),
-    });
-    const d = await r.json();
-    if (!r.ok) { toast(d.error || '重新生成失败', true); return; }
-    toast('🔄 已提交重新生成（新版本会自动加序号）');
-    refreshStatus();
-    startPoll();
-  } catch (e) { toast('重新生成失败：' + e.message, true); }
+  askConfirm('用该任务的提示词/参考图/参数重新生成一版吗？会作为新版本提交。', async () => {
+    try {
+      const r = await fetch('/api/regenerate', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({task_id: taskId}),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error || '重新生成失败', true); return; }
+      toast('🔄 已提交重新生成（新版本会自动加序号）');
+      refreshStatus();
+      startPoll();
+    } catch (e) { toast('重新生成失败：' + e.message, true); }
+  });
 }
 
 async function deleteAssembled(filename) {
-  if (!confirm('确定删除这个合成视频吗？删除后不可恢复。')) return;
-  try {
-    const r = await fetch('/api/delete_assembled', {
-      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename}),
-    });
-    const d = await r.json();
-    if (!r.ok) { toast(d.error || '删除失败', true); return; }
-    toast('🗑️ 合成视频已删除');
-    loadAssembleHistory();
-  } catch (e) { toast('删除失败：' + e.message, true); }
+  askConfirm('确定删除这个合成视频吗？删除后不可恢复。', async () => {
+    try {
+      const r = await fetch('/api/delete_assembled', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename}),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error || '删除失败', true); return; }
+      toast('🗑️ 合成视频已删除');
+      loadAssembleHistory();
+    } catch (e) { toast('删除失败：' + e.message, true); }
+  });
+}
+
+// ---------- 通用确认弹窗 ----------
+let confirmCallback = null;
+function askConfirm(message, onOk) {
+  $('confirmMsg').textContent = message;
+  confirmCallback = onOk;
+  $('confirmModalBg').style.display = 'flex';
+}
+function confirmOk() {
+  const cb = confirmCallback;
+  confirmCallback = null;
+  $('confirmModalBg').style.display = 'none';
+  if (cb) cb();
+}
+function confirmCancel() {
+  confirmCallback = null;
+  $('confirmModalBg').style.display = 'none';
 }
 
 async function clearHistory() {
@@ -2334,6 +2367,9 @@ $('ruleModalBg').addEventListener('click', e => { if (e.target === $('ruleModalB
 $('promptModalCancel').addEventListener('click', () => $('promptModalBg').style.display = 'none');
 $('promptModalOk').addEventListener('click', doPromptModify);
 $('promptModalBg').addEventListener('click', e => { if (e.target === $('promptModalBg')) $('promptModalBg').style.display = 'none'; });
+$('btnConfirmOk').addEventListener('click', confirmOk);
+$('btnConfirmCancel').addEventListener('click', confirmCancel);
+$('confirmModalBg').addEventListener('click', e => { if (e.target === $('confirmModalBg')) confirmCancel(); });
 ['roleImage1', 'roleImage2', 'sceneImage'].forEach(id => {
   $(id).addEventListener('change', () => autoSaveProject(true));
 });
