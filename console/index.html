@@ -426,8 +426,8 @@
         <h2 style="font-size:15px">🎬 合成完整视频</h2>
         <div class="desc">把所有已下载的视频段按顺序拼接成完整成片（转码约 1-3 分钟）。</div>
         <div class="row">
-          <button class="btn green" id="btnAssemble">🎬 一键合成完整视频</button>
           <button class="btn" id="btnPickVersions">🎞️ 选择版本</button>
+          <button class="btn green" id="btnAssemble">🎬 一键合成完整视频</button>
           <span class="hint" id="assembleStatus"></span>
         </div>
         <div id="versionPicker" style="margin-top:10px"></div>
@@ -1336,8 +1336,34 @@ async function renderFailureCodes() {
   } catch (e) { box.innerHTML = '加载失败'; }
 }
 
+let assembleVersionsCache = null;
+async function ensureAssembleVersions() {
+  if (assembleVersionsCache) return assembleVersionsCache;
+  const r = await fetch('/api/assemble_versions');
+  assembleVersionsCache = await r.json();
+  return assembleVersionsCache;
+}
+
 async function assemble() {
   const btn = $('btnAssemble');
+  // 1) 校验：无视频的段不能合成
+  let d;
+  try { d = await ensureAssembleVersions(); }
+  catch (e) { toast('版本信息加载失败：' + e.message, true); return; }
+  const segs = d.segments || [];
+  const noVideo = segs.filter(s => !(s.versions || []).length);
+  if (noVideo.length) {
+    toast(`⚠️ 以下段没有视频，无法合成：${noVideo.map(s => s.name).join('、')}`, true);
+    loadAssembleVersions();
+    return;
+  }
+  // 2) 多版本段必须先选择版本
+  const multi = segs.some(s => (s.versions || []).length > 1);
+  if (multi && !document.querySelector('.asm-sel')) {
+    toast('⚠️ 有段落存在多个版本，请先点「选择版本」选定后再合成', true);
+    loadAssembleVersions();
+    return;
+  }
   btn.disabled = true;
   $('assembleStatus').textContent = '🤖 合成中（约 1-3 分钟），请稍候…';
   $('assembleResult').innerHTML = '';
@@ -1398,8 +1424,7 @@ async function exportCsv() {
 async function loadAssembleVersions() {
   const box = $('versionPicker');
   try {
-    const r = await fetch('/api/assemble_versions');
-    const d = await r.json();
+    const d = await ensureAssembleVersions();
     const segs = d.segments || [];
     if (!segs.length) { box.innerHTML = '<div class="hint">还没有已下载的视频段，先提交生成</div>'; return; }
     const multi = segs.some(s => (s.versions || []).length > 1);
@@ -1408,9 +1433,11 @@ async function loadAssembleVersions() {
         + segs.map(s => `
           <div class="row" style="margin:4px 0">
             <span style="width:140px;font-size:12px;flex:none">${esc(s.name)}</span>
-            <select class="asm-sel" data-seg="${escAttr(s.name)}" style="flex:1;font-size:12px">
-              ${(s.versions || []).map(v => `<option value="${escAttr(v.filename)}">${esc(v.filename)} · ${esc(v.submitted_at || '')}${v.steps ? ` · ${v.steps}步` : ''}</option>`).join('')}
-            </select>
+            ${(s.versions || []).length
+              ? `<select class="asm-sel" data-seg="${escAttr(s.name)}" style="flex:1;font-size:12px">
+                   ${(s.versions || []).map(v => `<option value="${escAttr(v.filename)}">${esc(v.filename)} · ${esc(v.submitted_at || '')}${v.steps ? ` · ${v.steps}步` : ''}</option>`).join('')}
+                 </select>`
+              : `<span class="hint" style="color:var(--red)">无视频</span>`}
           </div>`).join('')
       : '<div class="hint">✅ 每段都只有一个版本，无需选择，直接「一键合成」即可。</div>';
   } catch (e) { box.innerHTML = '<div class="hint">版本加载失败</div>'; }
