@@ -3309,6 +3309,27 @@ class Handler(BaseHTTPRequestHandler):
                 })
             self._send(200, json.dumps({"segments": segs}, ensure_ascii=False))
             return
+        if path.path == "/api/assemble_history":
+            """已合成视频历史（素材目录下 合成_*.mp4，按时间倒序）。"""
+            files = []
+            for d in IMAGE_DIRS:
+                if not os.path.isdir(d):
+                    continue
+                for fn in os.listdir(d):
+                    if fn.startswith("合成_") and fn.lower().endswith(".mp4"):
+                        p = os.path.join(d, fn)
+                        try:
+                            size = os.path.getsize(p)
+                            mtime = time.strftime(
+                                "%Y-%m-%d %H:%M:%S",
+                                time.localtime(os.path.getmtime(p)),
+                            )
+                        except OSError:
+                            continue
+                        files.append({"filename": fn, "size": size, "mtime": mtime})
+            files.sort(key=lambda x: x["mtime"], reverse=True)
+            self._send(200, json.dumps({"history": files}, ensure_ascii=False))
+            return
         if path.path == "/api/llm_check":
             self._send(200, json.dumps(check_lmstudio(), ensure_ascii=False))
             return

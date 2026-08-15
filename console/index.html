@@ -432,6 +432,10 @@
         </div>
         <div id="versionPicker" style="margin-top:10px"></div>
         <div id="assembleResult" style="margin-top:12px"></div>
+        <div style="margin-top:16px">
+          <div class="hint" style="font-weight:700;margin-bottom:8px">📼 合成历史（可反复合成，全部保留）</div>
+          <div id="assembleHistory"></div>
+        </div>
       </div>
     </div>
   </section>
@@ -1386,6 +1390,7 @@ async function assemble() {
         if (pd.status === 'done') {
           clearInterval(poll);
           btn.disabled = false;
+          loadAssembleHistory();
           $('assembleResult').innerHTML = `
             <video src="/media/${encodeURIComponent(pd.filename)}" controls preload="metadata" style="width:100%;max-height:480px;border-radius:10px;background:#000"></video>
             <div class="hint" style="margin-top:8px">✅ ${esc(pd.filename)}
@@ -1441,6 +1446,27 @@ async function loadAssembleVersions() {
           </div>`).join('')
       : '<div class="hint">✅ 每段都只有一个版本，无需选择，直接「一键合成」即可。</div>';
   } catch (e) { box.innerHTML = '<div class="hint">版本加载失败</div>'; }
+}
+
+async function loadAssembleHistory() {
+  const box = $('assembleHistory');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/assemble_history');
+    const d = await r.json();
+    const files = d.history || [];
+    box.innerHTML = files.length
+      ? `<div class="cards">${files.map(f => `
+          <div class="card-item">
+            <div class="r1"><span class="name" style="font-size:12px">${esc(f.filename)}</span></div>
+            <div class="meta">${esc(f.mtime)} · ${(f.size / 1048576).toFixed(1)}MB</div>
+            <video src="/media/${encodeURIComponent(f.filename)}" controls preload="metadata" style="width:100%;border-radius:8px;max-height:220px;background:#000"></video>
+            <div class="row" style="margin-top:6px">
+              <a href="/media/${encodeURIComponent(f.filename)}" download style="color:var(--blue);font-size:12px">⬇️ 下载</a>
+            </div>
+          </div>`).join('')}</div>`
+      : '<div class="hint">还没有合成记录，点「一键合成」生成第一版</div>';
+  } catch (e) { box.innerHTML = '<div class="hint">历史加载失败</div>'; }
 }
 
 async function clearHistory() {
@@ -2292,6 +2318,7 @@ renderSteps();
 loadImages();
 loadProject();
 renderProjects();
+loadAssembleHistory();
 checkConn();
 checkLlm();
 loadConfigIntoForm();
