@@ -1190,6 +1190,18 @@ function pollExpandTask(tid) {
       const pd = await pr.json();
       if (pd.status === 'running' || pd.status === 'queued') {
         $('promptHint').textContent = `🤖 扩写中：${pd.done}/${pd.total} 段完成${pd.current ? ' · ' + pd.current : ''}（约 1 分钟/段）`;
+        // 每段完成即保存，实时拉取渲染已完成段
+        try {
+          const pr2 = await fetch('/api/project', {
+            method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}),
+          });
+          const d2 = await pr2.json();
+          const saved = (d2.project && d2.project.prompt_tasks) || [];
+          if (saved.length && saved.length !== promptTasks.length) {
+            promptTasks = saved;
+            renderPromptCards();
+          }
+        } catch (e) {}
       } else {
         clearInterval(poll);
         toastClear();

@@ -2926,51 +2926,46 @@ def start_expand_job(text, token=""):
             job["total"] = len(storyboards)
             job["status"] = "running"
             rows, meta = parse_script_json(text)
-            prompts = {}
+            # 断点续跑：读项目现有提示词，已完整段跳过
+            st0 = load_state()
+            existing = (st0.get("project") or {}).get("prompt_tasks") or []
             prev_p = ""
             for i, sb in enumerate(storyboards):
                 scene = str(_pick(sb, "scene", "location", "scene_name") or "").strip()
                 job["current"] = f"第 {i + 1}/{len(storyboards)} 段" + (f" · {scene}" if scene else "")
-                try:
-                    prompts[i + 1] = llm_expand_one(sb, role_map, token, prev_prompt=prev_p)
-                    if prompts[i + 1]:
-                        prev_p = prompts[i + 1]
-                except Exception as e:
-                    print(f"[expand] 第 {i + 1} 段扩写失败，回退规则：{e}")
-                    prompts[i + 1] = None
-                job["done"] = i + 1
-            for i, (sb, row) in enumerate(zip(storyboards, rows)):
-                p = prompts.get(i + 1)
+                existing_p = str(existing[i].get("prompt") or "") if i < len(existing) else ""
+                if len(existing_p) > 800 and "overall_soundscape" in existing_p and "non_diegetic_music" in existing_p:
+                    rows[i]["prompt"] = existing_p
+                    prev_p = existing_p
+                    job["done"] = i + 1
+                    print(f"[expand] 第 {i + 1} 段已完整，跳过", flush=True)
+                    continue
+                p = None
+                for attempt in range(3):
+                    try:
+                        p = llm_expand_one(sb, role_map, token, prev_prompt=prev_p)
+                        if p:
+                            break
+                    except Exception as e:
+                        print(f"[expand] 第 {i + 1} 段第 {attempt + 1} 次失败：{str(e)[:60]}", flush=True)
+                        _ensure_llm_loaded(token)
+                        time.sleep(3)
                 if p:
-                    row["prompt"] = _normalize_llm_prompt(p)
+                    rows[i]["prompt"] = _normalize_llm_prompt(p)
+                    prev_p = p
+                    _save_expand_progress(rows, tid)  # 每段立即保存
                 else:
+                    print(f"[expand] 第 {i + 1} 段扩写失败，回退规则", flush=True)
                     own = str(_pick(sb, "prompt", "video_prompt", "text", "description") or "").strip()
-                    row["prompt"] = (
-                        enhance_prompt(optimize_prompt_block(own, row["duration"]), row)
+                    rows[i]["prompt"] = (
+                        enhance_prompt(optimize_prompt_block(own, rows[i]["duration"]), rows[i])
                         if own else compose_storyboard_prompt(sb, role_map, detailed=True)
                     )
+                job["done"] = i + 1
             job["tasks"] = rows
             job["meta"] = meta
             job["status"] = "done"
-            # 完成时自动写进项目，刷新页面即恢复提示词
-            try:
-                st = load_state()
-                et = st.get("expand_task") or {}
-                if et.get("task_id") != tid:
-                    return  # 已被新任务取代，不写入旧结果
-                proj = dict(st.get("project") or {})
-                proj["prompt_tasks"] = rows
-                st["project"] = proj
-                projects = st.get("projects") or {}
-                if proj.get("name"):
-                    snap = dict(proj)
-                    snap["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
-                    projects[proj["name"]] = snap
-                    st["projects"] = projects
-                st.pop("expand_task", None)
-                save_state(st)
-            except Exception:
-                pass
+            _save_expand_progress(rows, tid, final=True)
         except Exception as e:
             job["status"] = "error"
             job["error"] = str(e)
@@ -2978,6 +2973,49 @@ def start_expand_job(text, token=""):
             job["current"] = ""
     threading.Thread(target=work, daemon=True).start()
     return tid
+
+
+def _save_expand_progress(rows, tid, final=False):
+    """扩写进度保存：每段写回项目 prompt_tasks（断点续跑 + 前端可见）。"""
+    try:
+        st = load_state()
+        et = st.get("expand_task") or {}
+        if et.get("task_id") != tid:
+            return False
+        proj = dict(st.get("project") or {})
+        proj["prompt_tasks"] = rows
+        proj["prompt_updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        st["project"] = proj
+        projects = st.get("projects") or {}
+        if proj.get("name"):
+            snap = dict(proj)
+            snap["updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+            projects[proj["name"]] = snap
+            st["projects"] = projects
+        if final:
+            st.pop("expand_task", None)
+        save_state(st)
+        return True
+    except Exception:
+        return False
+
+
+def _ensure_llm_loaded(token=""):
+    """LM Studio 不可用时尝试 lms load 重载（防崩溃中断）。"""
+    import subprocess as _sp
+    for _ in range(3):
+        try:
+            r = check_lmstudio(token)
+            if r.get("available"):
+                return True
+        except Exception:
+            pass
+        try:
+            _sp.run(["lms", "load", _lm_model()], capture_output=True, timeout=120)
+        except Exception:
+            pass
+        time.sleep(15)
+    return False
 
 
 def llm_polish_prompts(rows, token=""):
