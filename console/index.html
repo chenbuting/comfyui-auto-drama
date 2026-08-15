@@ -433,6 +433,21 @@
           <button class="btn green" id="btnAssemble">🎬 一键合成完整视频</button>
           <span class="hint" id="assembleStatus"></span>
         </div>
+        <div class="row" style="margin-top:8px;align-items:center">
+          <label style="font-size:12px">合成段范围：从第
+            <input type="number" id="asmStart" min="1" value="1" style="width:60px;padding:4px">
+          </label>
+          <label style="font-size:12px">段 到 第
+            <input type="number" id="asmEnd" min="1" value="" placeholder="全部" style="width:70px;padding:4px">
+          </label>
+          <span class="hint" style="font-size:11px">段（几百段时可分批合成，默认全部）</span>
+        </div>
+        <div id="assembleProgress" style="margin-top:8px;display:none">
+          <div style="height:8px;background:#e2e8f0;border-radius:99px;overflow:hidden">
+            <div id="asmProgressBar" style="height:100%;width:0%;background:var(--blue);transition:width .4s"></div>
+          </div>
+          <div class="hint" id="asmProgressText" style="font-size:11px;margin-top:4px"></div>
+        </div>
         <div id="versionPicker" style="margin-top:10px"></div>
         <div id="assembleResult" style="margin-top:12px"></div>
         <div style="margin-top:16px">
@@ -1470,10 +1485,16 @@ async function assemble() {
   document.querySelectorAll('.asm-sel').forEach(sel => {
     selection[sel.dataset.seg] = sel.value;
   });
+  const startV = parseInt($('asmStart').value, 10) || 1;
+  const endRaw = $('asmEnd').value.trim();
+  const seg_range = endRaw ? [startV, Math.max(startV, parseInt(endRaw, 10) || startV)] : null;
+  $('assembleProgress').style.display = '';
+  $('asmProgressBar').style.width = '0%';
+  $('asmProgressText').textContent = '准备中…';
   try {
     const r = await fetch('/api/assemble', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({project_name: $('projectName').value.trim(), selection}),
+      body: JSON.stringify({project_name: $('projectName').value.trim(), selection, seg_range}),
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error, true); btn.disabled = false; return; }
@@ -1482,10 +1503,18 @@ async function assemble() {
         const pr = await fetch(`/api/assemble_progress?task_id=${encodeURIComponent(d.task_id)}`);
         const pd = await pr.json();
         $('assembleStatus').textContent = pd.message || '';
+        if (pd.total) {
+          $('asmProgressBar').style.width = `${Math.round(pd.done / pd.total * 100)}%`;
+          $('asmProgressText').textContent = `处理中 ${pd.done}/${pd.total} 段`;
+        }
         if (pd.status === 'done') {
           clearInterval(poll);
           btn.disabled = false;
           loadAssembleHistory();
+          const sk = pd.skipped || [];
+          $('asmProgressText').textContent = sk.length
+            ? `完成 ${pd.total} 段，跳过 ${sk.length} 段（${sk.join('、')}）`
+            : `完成 ${pd.total || '全部'} 段`;
           $('assembleResult').innerHTML = `
             <video src="/media/${encodeURIComponent(pd.filename)}" controls preload="none" style="width:100%;max-height:480px;border-radius:10px;background:#000"></video>
             <div class="hint" style="margin-top:8px">✅ ${esc(pd.filename)}

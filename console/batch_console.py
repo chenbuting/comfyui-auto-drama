@@ -376,13 +376,13 @@ def detect_lead_noise_sec(video_path):
             pass
 
 
-def assemble_project_video(project_name="", selection=None):
+def assemble_project_video(project_name="", selection=None, seg_range=None, progress_cb=None):
     """按项目剧本顺序合成完整视频。
 
-    规则：取项目 prompt_tasks 的段顺序；每段默认取"同名任务中最新提交且已下载"的一版；
-    selection（{段名: 视频文件名}）可手动指定。没有 prompt_tasks 时回退为按提交顺序
-    拼接所有已下载任务。
-    返回 (filename, 绝对路径)。
+    规则：取项目 prompt_tasks 的段顺序（可按 seg_range 截取起止段，1 起）；每段默认取
+    "同名任务中最新提交且已下载"的一版；selection（{段名: 视频文件名}）可手动指定。
+    单段转码失败跳过不中断；进度通过 progress_cb(done, total) 回调。
+    返回 (filename, 绝对路径, skipped列表)。
     """
     st = load_state()
     proj = st.get("project") or {}
@@ -392,7 +392,11 @@ def assemble_project_video(project_name="", selection=None):
     if pt:
         missing = []
         selection = selection or {}
-        for seg in pt:
+        total = len(pt)
+        start, end = seg_range or (0, total)
+        if not (0 <= start < end <= total):
+            raise RuntimeError(f"段范围无效：{start + 1}-{end}（共 {total} 段）")
+        for seg in pt[start:end]:
             sname = str(seg.get("name") or "")
             if not sname:
                 continue
@@ -434,12 +438,16 @@ def assemble_project_video(project_name="", selection=None):
         raise RuntimeError("找不到视频文件（可能未下载）")
     tmpdir = tempfile.mkdtemp(prefix="assemble_")
     norm_segs = []
+    skipped = []
     try:
+        total_segs = len(src_files)
         for i, src in enumerate(src_files):
             ext = os.path.splitext(src)[1] or ".mp4"
             tmp_src = os.path.join(tmpdir, f"src_{i}{ext}")
             shutil.copy(src, tmp_src)
             seg = os.path.join(tmpdir, f"seg_{i}.mp4")
+            if progress_cb:
+                progress_cb(i, total_segs)
             cut = detect_lead_noise_sec(tmp_src)
             if cut > 0:
                 # 裁剪开头起始音节：音画同步 trim，保留台词前的间隙
@@ -462,8 +470,14 @@ def assemble_project_video(project_name="", selection=None):
                 capture_output=True,
             )
             if r.returncode != 0 or not os.path.exists(seg):
-                raise RuntimeError(f"第 {i + 1} 段转码失败：{r.stderr.decode('utf-8', 'ignore')[-200:]}")
+                skipped.append(src_meta[i][0] if i < len(src_meta) else f"第{i + 1}段")
+                print(f"[assemble] 第 {i + 1} 段转码失败，跳过：{r.stderr.decode('utf-8', 'ignore')[-120:]}")
+                continue
             norm_segs.append(seg)
+        if progress_cb:
+            progress_cb(total_segs, total_segs)
+        if not norm_segs:
+            raise RuntimeError("所有片段都处理失败，无法合成")
         listfile = os.path.join(tmpdir, "list.txt")
         with open(listfile, "w", encoding="utf-8") as f:
             for p in norm_segs:
@@ -478,25 +492,32 @@ def assemble_project_video(project_name="", selection=None):
         )
         if r.returncode != 0 or not os.path.exists(dest):
             raise RuntimeError(f"合成失败：{r.stderr.decode('utf-8', 'ignore')[-200:]}")
-        return outname, dest
+        return outname, dest, skipped
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def start_assemble_job(project_name="", selection=None):
+def start_assemble_job(project_name="", selection=None, seg_range=None):
     tid = "asm_" + uuid.uuid4().hex[:10]
-    job = {"status": "queued", "message": "准备中", "filename": None, "error": None}
+    job = {"status": "queued", "message": "准备中", "filename": None, "error": None,
+           "done": 0, "total": 0, "skipped": []}
     with ASSEMBLE_JOBS_LOCK:
         ASSEMBLE_JOBS[tid] = job
 
     def work():
         job["status"] = "running"
-        job["message"] = "转码并拼接中（约 1-3 分钟）…"
+        job["message"] = "转码并拼接中…"
         try:
-            fn, _ = assemble_project_video(project_name, selection)
+            def _prog(done, total):
+                job["done"] = done
+                job["total"] = total
+                job["message"] = f"处理中 {done}/{total} 段…"
+
+            fn, _, skipped = assemble_project_video(project_name, selection, seg_range, _prog)
             job["filename"] = fn
+            job["skipped"] = skipped
             job["status"] = "done"
-            job["message"] = "合成完成"
+            job["message"] = f"合成完成{('，跳过 ' + str(len(skipped)) + ' 段') if skipped else ''}"
         except Exception as e:
             job["status"] = "error"
             job["error"] = str(e)
@@ -3283,6 +3304,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({
                 "status": job["status"], "message": job["message"],
                 "filename": job["filename"], "error": job["error"],
+                "done": job.get("done", 0), "total": job.get("total", 0),
+                "skipped": job.get("skipped", []),
             }, ensure_ascii=False))
             return
         if path.path == "/api/assemble_versions":
@@ -4030,7 +4053,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/assemble":
             project_name = body.get("project_name", "")
-            tid = start_assemble_job(project_name, body.get("selection") or {})
+            seg_range = body.get("seg_range")
+            if seg_range and isinstance(seg_range, list) and len(seg_range) == 2:
+                seg_range = (int(seg_range[0]) - 1, int(seg_range[1]))  # 前端 1 起 → 内部 0 起
+            else:
+                seg_range = None
+            tid = start_assemble_job(project_name, body.get("selection") or {}, seg_range)
             self._send(200, json.dumps({"task_id": tid}, ensure_ascii=False))
             return
         if path == "/api/export":
