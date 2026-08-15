@@ -2264,6 +2264,15 @@ def _lm_headers(token):
     return h
 
 
+def _v1(url):
+    """把服务地址规范化为带 /v1 的 OpenAI 兼容前缀。
+    配置里 URL 可不带 /v1（如 http://127.0.0.1:1234），已带 /v1 也能识别。"""
+    url = str(url or "").rstrip("/")
+    if url.endswith("/v1"):
+        return url
+    return url + "/v1"
+
+
 def _llm_endpoints():
     """返回 (主端点, 备用端点)；端点 dict：{url, api_key, model, provider}。"""
     cfg = _CONFIG["llm"]
@@ -2297,7 +2306,7 @@ def _chat_once(endpoint, messages, token="", timeout=1800):
         "max_tokens": 12000,
     }
     req = urllib.request.Request(
-        endpoint["url"] + "/chat/completions",
+        _v1(endpoint["url"]) + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", **_lm_headers(api_key)},
     )
@@ -2312,7 +2321,7 @@ def check_lmstudio(token="", timeout=6):
             continue
         try:
             api_key = token.strip() or ep.get("api_key") or ""
-            req = urllib.request.Request(ep["url"] + "/models", headers=_lm_headers(api_key))
+            req = urllib.request.Request(_v1(ep["url"]) + "/models", headers=_lm_headers(api_key))
             with _opener().open(req, timeout=timeout) as r:
                 data = json.loads(r.read().decode("utf-8"))
             names = [m.get("id") or m.get("name") for m in data.get("data", [])]
@@ -2333,7 +2342,7 @@ def check_lmstudio(token="", timeout=6):
 
 def boogu_check(timeout=4):
     try:
-        req = urllib.request.Request(BOOGU_URL + "/v1/models", headers={"User-Agent": "batch-console"})
+        req = urllib.request.Request(_v1(BOOGU_URL) + "/models", headers={"User-Agent": "batch-console"})
         with _opener().open(req, timeout=timeout) as r:
             data = json.loads(r.read().decode("utf-8"))
         return {"ok": True, "models": [m.get("id") for m in data.get("data", [])]}
@@ -2370,7 +2379,7 @@ def _image_gen_cloud(prompt, filename, size="768x1024", timeout=300):
         "response_format": "b64_json",
     }
     req = urllib.request.Request(
-        ep["url"] + "/images/generations",
+        _v1(ep["url"]) + "/images/generations",
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", **_lm_headers(ep.get("api_key") or "")},
     )

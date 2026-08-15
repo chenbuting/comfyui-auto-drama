@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-08-15 · v0.10.4 — 修复 AI 检测不可用（OpenAI 兼容 URL 缺失 /v1）
+
+### 本次更新内容
+
+- 问题：配置化改造后 LLM/生图请求拼的是 `url + /models`，而 OpenAI 兼容服务实际路径是 `url + /v1/models`（LM Studio / Boogu），导致 200 空响应，前端显示"模型不可用"
+- 修复：新增 `_v1(url)` 规范化——URL 未带 `/v1` 自动补全，已带 `/v1`（如云端 base_url）不重复；应用于 LLM `/models`、`/chat/completions`、文生图 `/images/generations`、Boogu 检测
+- 验证：LM Studio `qwen3.6-27b-abliterated-mlx` 检测 available=True；Boogu `boogu-image` 在线
+
+### 影响与注意事项
+
+- 配置里 URL 填主机地址即可（自动补 `/v1`），云端填 `https://api.xxx.com/v1` 也能识别
+
+---
+
 ## 2026-08-15 · v0.10.3 — Windows 跨平台兼容
 
 ### 本次更新内容
