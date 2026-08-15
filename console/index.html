@@ -347,6 +347,12 @@
         <button class="btn" id="btnReverifyAssets">🩺 补质检（已有图）</button>
         <button class="btn green" id="btnGenAllAssets">⚡ 一键生成全部参考图</button>
       </div>
+      <div id="assetProgress" style="display:none;margin-top:8px">
+        <div style="height:8px;background:#e2e8f0;border-radius:99px;overflow:hidden">
+          <div id="assetBar" style="height:100%;width:0%;background:var(--blue);transition:width .4s"></div>
+        </div>
+        <div class="hint" id="assetProgressText" style="font-size:11px;margin-top:4px"></div>
+      </div>
       <h3 style="font-size:14px;margin:16px 0 10px">📋 资产状态表 <span class="hint">（身份/状态分开；扩写与生图从这里取服装发型，一字不差，防止文字与参考图打架）</span></h3>
       <div id="assetStateBox"></div>
       <h3 style="font-size:14px;margin:16px 0 10px">👤 角色锚点图 <span class="hint">（生成后点「设为角色参考图」进链式 R2V）</span></h3>
@@ -2463,6 +2469,14 @@ async function genAllAssets() {
   const total = roles.length + sceneNames.length + sb.length;
   if (!total) { toast('没有可生成的资产', true); return; }
   toastLoading(`⚡ 一键生成中（共 ${total} 张，每张约 10-30 秒）…`);
+  $('assetProgress').style.display = '';
+  $('assetBar').style.width = '0%';
+  let doneN = 0;
+  const tick = (label) => {
+    doneN++;
+    $('assetBar').style.width = `${Math.round(doneN / total * 100)}%`;
+    $('assetProgressText').textContent = `已生成 ${doneN}/${total} 张 · ${label}`;
+  };
   try {
     for (let i = 0; i < roles.length; i++) {
       const r = roles[i]; const name = r.role_name || r.name;
@@ -2470,7 +2484,9 @@ async function genAllAssets() {
         assetImgs.role[name] = await genAsset('role', name, `半身肖像照，1980年代中国${r.role_desc || '乡村人物'}，真实人物照片风格，自然光，简洁背景，面部清晰，胶片质感`, '锚点');
         assetState.roles[name] = assetState.roles[name] || {};
         assetState.roles[name].reference = assetImgs.role[name];
+        autoSaveProject(true);  // 每张立即保存
       }
+      tick(`角色「${name}」`);
     }
     for (let i = 0; i < sceneNames.length; i++) {
       const sc = sceneNames[i];
@@ -2478,17 +2494,22 @@ async function genAllAssets() {
         assetImgs.scene[sc] = await genAsset('scene', sc, `${sc}，1980年代中国乡村环境，写实场景照片，电影感，自然光，胶片质感，无人`, '场景');
         assetState.scenes[sc] = assetState.scenes[sc] || {};
         assetState.scenes[sc].reference = assetImgs.scene[sc];
+        autoSaveProject(true);
       }
+      tick(`场景「${sc}」`);
     }
     for (let i = 0; i < sb.length; i++) {
       if (!assetImgs.story[i]) {
         assetImgs.story[i] = await genAsset('story', `s${i + 1}`, defaultStoryPrompt(i), '分镜');
+        autoSaveProject(true);
       }
+      tick(`分镜 ${i + 1}`);
     }
     renderAssets();
     autoSaveProject(true);
+    $('assetProgress').style.display = 'none';
     toast(`✅ 一键生成完成，共 ${total} 张`);
-  } catch (e) { toast('一键生成中断：' + e.message, true); renderAssets(); }
+  } catch (e) { $('assetProgress').style.display = 'none'; toast('一键生成中断：' + e.message, true); renderAssets(); }
 }
 
 // 给已有参考图补质检（老项目升级后一键补检，结果写入资产表）
