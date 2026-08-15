@@ -427,8 +427,10 @@
         <div class="desc">把所有已下载的视频段按顺序拼接成完整成片（转码约 1-3 分钟）。</div>
         <div class="row">
           <button class="btn green" id="btnAssemble">🎬 一键合成完整视频</button>
+          <button class="btn" id="btnPickVersions">🎞️ 选择版本</button>
           <span class="hint" id="assembleStatus"></span>
         </div>
+        <div id="versionPicker" style="margin-top:10px"></div>
         <div id="assembleResult" style="margin-top:12px"></div>
       </div>
     </div>
@@ -1339,10 +1341,14 @@ async function assemble() {
   btn.disabled = true;
   $('assembleStatus').textContent = '🤖 合成中（约 1-3 分钟），请稍候…';
   $('assembleResult').innerHTML = '';
+  const selection = {};
+  document.querySelectorAll('.asm-sel').forEach(sel => {
+    selection[sel.dataset.seg] = sel.value;
+  });
   try {
     const r = await fetch('/api/assemble', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({project_name: $('projectName').value.trim()}),
+      body: JSON.stringify({project_name: $('projectName').value.trim(), selection}),
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error, true); btn.disabled = false; return; }
@@ -1387,6 +1393,27 @@ async function exportCsv() {
   const blob = new Blob(['\ufeff' + d.csv], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob); a.download = 'tasks.csv'; a.click();
+}
+
+async function loadAssembleVersions() {
+  const box = $('versionPicker');
+  try {
+    const r = await fetch('/api/assemble_versions');
+    const d = await r.json();
+    const segs = d.segments || [];
+    if (!segs.length) { box.innerHTML = '<div class="hint">还没有已下载的视频段，先提交生成</div>'; return; }
+    const multi = segs.some(s => (s.versions || []).length > 1);
+    box.innerHTML = multi
+      ? `<div class="hint" style="margin-bottom:6px">🎞️ 每段选择要合成的版本（默认最新）：</div>`
+        + segs.map(s => `
+          <div class="row" style="margin:4px 0">
+            <span style="width:140px;font-size:12px;flex:none">${esc(s.name)}</span>
+            <select class="asm-sel" data-seg="${escAttr(s.name)}" style="flex:1;font-size:12px">
+              ${(s.versions || []).map(v => `<option value="${escAttr(v.filename)}">${esc(v.filename)} · ${esc(v.submitted_at || '')}${v.steps ? ` · ${v.steps}步` : ''}</option>`).join('')}
+            </select>
+          </div>`).join('')
+      : '<div class="hint">✅ 每段都只有一个版本，无需选择，直接「一键合成」即可。</div>';
+  } catch (e) { box.innerHTML = '<div class="hint">版本加载失败</div>'; }
 }
 
 async function clearHistory() {
@@ -2186,6 +2213,7 @@ $('btnSubmit').addEventListener('click', submit);
 $('btnRefreshStatus').addEventListener('click', refreshStatus);
 $('btnApplyMp').addEventListener('click', applyMpAll);
 $('btnAssemble').addEventListener('click', assemble);
+$('btnPickVersions').addEventListener('click', loadAssembleVersions);
 $('btnExport').addEventListener('click', exportCsv);
 $('btnRefreshRecords').addEventListener('click', refreshRecords);
 $('btnClearHistory').addEventListener('click', clearHistory);

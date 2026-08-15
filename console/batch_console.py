@@ -376,11 +376,11 @@ def detect_lead_noise_sec(video_path):
             pass
 
 
-def assemble_project_video(project_name=""):
+def assemble_project_video(project_name="", selection=None):
     """按项目剧本顺序合成完整视频。
 
-    规则：取项目 prompt_tasks 的段顺序；每段取"同名任务中最新提交且已下载"的一版
-    （任务名可能带 _v2/_v6 后缀，同名匹配）。没有 prompt_tasks 时回退为按提交顺序
+    规则：取项目 prompt_tasks 的段顺序；每段默认取"同名任务中最新提交且已下载"的一版；
+    selection（{段名: 视频文件名}）可手动指定。没有 prompt_tasks 时回退为按提交顺序
     拼接所有已下载任务。
     返回 (filename, 绝对路径)。
     """
@@ -391,6 +391,7 @@ def assemble_project_video(project_name=""):
     src_meta = []
     if pt:
         missing = []
+        selection = selection or {}
         for seg in pt:
             sname = str(seg.get("name") or "")
             if not sname:
@@ -402,9 +403,17 @@ def assemble_project_video(project_name=""):
             ]
             cands.sort(key=lambda x: str(x.get("submitted_at") or ""))
             if cands:
-                latest = cands[-1]
-                of = latest["output_file"]
-                src_meta.append((sname, of))
+                picked = selection.get(sname)
+                if picked:
+                    hit = next(
+                        (t for t in cands if t["output_file"].get("filename") == picked),
+                        None,
+                    )
+                    if not hit:
+                        raise RuntimeError(f"段「{sname}」指定的版本不存在：{picked}")
+                    src_meta.append((sname, hit["output_file"]))
+                else:
+                    src_meta.append((sname, cands[-1]["output_file"]))
             else:
                 missing.append(sname)
         if missing:
@@ -474,7 +483,7 @@ def assemble_project_video(project_name=""):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
-def start_assemble_job(project_name=""):
+def start_assemble_job(project_name="", selection=None):
     tid = "asm_" + uuid.uuid4().hex[:10]
     job = {"status": "queued", "message": "准备中", "filename": None, "error": None}
     with ASSEMBLE_JOBS_LOCK:
@@ -484,7 +493,7 @@ def start_assemble_job(project_name=""):
         job["status"] = "running"
         job["message"] = "转码并拼接中（约 1-3 分钟）…"
         try:
-            fn, _ = assemble_project_video(project_name)
+            fn, _ = assemble_project_video(project_name, selection)
             job["filename"] = fn
             job["status"] = "done"
             job["message"] = "合成完成"
@@ -3267,6 +3276,39 @@ class Handler(BaseHTTPRequestHandler):
                 "filename": job["filename"], "error": job["error"],
             }, ensure_ascii=False))
             return
+        if path.path == "/api/assemble_versions":
+            """返回项目每段可用的视频版本列表（供合成时手动选择）。"""
+            st = load_state()
+            proj = st.get("project") or {}
+            pt = proj.get("prompt_tasks") or []
+            all_tasks = st.get("tasks", [])
+            segs = []
+            for seg in pt:
+                sname = str(seg.get("name") or "")
+                if not sname:
+                    continue
+                cands = [
+                    t for t in all_tasks
+                    if (t.get("name") == sname or str(t.get("name") or "").startswith(sname + "_"))
+                    and t.get("output_file") and t.get("downloaded")
+                ]
+                cands.sort(key=lambda x: str(x.get("submitted_at") or ""))
+                segs.append({
+                    "name": sname,
+                    "versions": [
+                        {
+                            "filename": t["output_file"].get("filename"),
+                            "task_name": t.get("name"),
+                            "submitted_at": t.get("submitted_at"),
+                            "quality": t.get("quality"),
+                            "steps": t.get("steps"),
+                            "mode": t.get("mode"),
+                        }
+                        for t in cands
+                    ],
+                })
+            self._send(200, json.dumps({"segments": segs}, ensure_ascii=False))
+            return
         if path.path == "/api/llm_check":
             self._send(200, json.dumps(check_lmstudio(), ensure_ascii=False))
             return
@@ -3947,7 +3989,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/assemble":
             project_name = body.get("project_name", "")
-            tid = start_assemble_job(project_name)
+            tid = start_assemble_job(project_name, body.get("selection") or {})
             self._send(200, json.dumps({"task_id": tid}, ensure_ascii=False))
             return
         if path == "/api/export":
