@@ -4069,7 +4069,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/regenerate":
             """用原任务重新生成一版；body 可覆盖 prompt/quality/steps/mp。
-            参考图/时长/模式沿用原任务；链式为单段重跑（不自动链式）。"""
+            save_to_project=True 时同时把新提示词写回项目 prompt_tasks（永久）。"""
             task_id = str(body.get("task_id") or "")
             st = load_state()
             t = next((x for x in st.get("tasks", []) if x.get("id") == task_id), None)
@@ -4091,6 +4091,30 @@ class Handler(BaseHTTPRequestHandler):
                 "quality": body.get("quality", t.get("quality")),
                 "steps": body.get("steps", t.get("steps")),
             }
+            # 可选：把新提示词永久写回项目提示词库
+            if body.get("save_to_project"):
+                new_prompt = new_task["prompt"]
+                st2 = load_state()
+                proj2 = dict(st2.get("project") or {})
+                pt2 = proj2.get("prompt_tasks") or []
+                base_name = str(t.get("name") or "")
+                hit = next(
+                    (s for s in pt2
+                     if str(s.get("name") or "") == base_name
+                     or base_name.startswith(str(s.get("name") or "") + "_")),
+                    None,
+                )
+                if hit and new_prompt:
+                    hit["prompt"] = new_prompt
+                    proj2["prompt_tasks"] = pt2
+                    proj2["prompt_updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+                    proj2["updated_at"] = proj2["prompt_updated_at"]
+                    st2["project"] = proj2
+                    projects2 = st2.get("projects") or {}
+                    if proj2.get("name"):
+                        projects2[proj2["name"]] = dict(proj2)
+                        st2["projects"] = projects2
+                    save_state(st2)
             server = st.get("server") or DEFAULT_SERVER
             results, err = submit_tasks(server, [new_task], auto_download=True, chain_mode=False)
             if err:

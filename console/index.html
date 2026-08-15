@@ -658,6 +658,10 @@
       </label>
     </div>
     <div class="hint" style="margin:10px 0">参考图：<span id="regenRefs"></span></div>
+    <label class="field" style="flex-direction:row;align-items:center;gap:8px;margin:8px 0">
+      <input type="checkbox" id="regenSaveProject" style="width:auto">
+      💾 同时更新到项目提示词库（以后第 4/6 步都用这版提示词）
+    </label>
     <div class="hint" style="margin-bottom:14px">注：重新生成为单段重跑，不参与链式衔接；如需整链请用第 7 步的链式提交。</div>
     <div class="row" style="justify-content:flex-end;gap:10px">
       <button class="btn" id="btnRegenCancel">取消</button>
@@ -1575,6 +1579,7 @@ async function regenSubmit() {
         quality: $('regenQuality').value,
         steps: parseInt($('regenSteps').value, 10),
         mp: parseFloat($('regenMp').value),
+        save_to_project: $('regenSaveProject').checked,
       }),
     });
     const d = await r.json();
