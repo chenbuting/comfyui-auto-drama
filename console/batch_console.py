@@ -1024,7 +1024,9 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
         if any(x.get("prompt_id") for x in state["tasks"] if x["id"] == tid):
             results.append({"id": tid, "ok": False, "error": "已提交过，跳过", "failure_code": "F-DUP-SUBMIT"})
             continue
-        is_chain_waiting = bool(chain_mode) and (idx > 0 or has_open_chain)
+        is_chain_waiting = bool(task.get("chain_waiting")) or (
+            bool(chain_mode) and (idx > 0 or has_open_chain)
+        )
         if not is_chain_waiting:
             try:
                 resp = api_post(server, "/prompt", {"prompt": g, "client_id": "batch_console"})
@@ -1062,7 +1064,8 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
             "downloaded": False,
             "recorded": False,
             "chain_waiting": is_chain_waiting,
-            "chain_prev": state["tasks"][-1]["id"] if (chain_mode and idx > 0 and state["tasks"]) else None,
+            "chain_prev": task.get("chain_prev")
+            or (state["tasks"][-1]["id"] if (chain_mode and idx > 0 and state["tasks"]) else None),
             "chain_done": False,
         })
         results.append({"id": tid, "ok": True, "prompt_id": pid, "waiting": is_chain_waiting})
@@ -1251,9 +1254,15 @@ def advance_chain(server, state):
     """链式衔接：上一段完成并下载后，抽最后一帧上传，提交下一段。"""
     tasks = state.get("tasks", [])
     changed = False
-    for i, t in enumerate(tasks):
-        nxt = tasks[i + 1] if i + 1 < len(tasks) else None
-        if not nxt or not nxt.get("chain_waiting") or nxt.get("prompt_id"):
+    by_id = {t.get("id"): t for t in tasks}
+    for i, nxt in enumerate(tasks):
+        if not nxt.get("chain_waiting") or nxt.get("prompt_id"):
+            continue
+        # 按 chain_prev 找上一段（支持重新生成指定上一段）；无则取列表前一个
+        t = by_id.get(nxt.get("chain_prev")) if nxt.get("chain_prev") else None
+        if t is None and i > 0:
+            t = tasks[i - 1]
+        if t is None:
             continue
         if t.get("chain_done"):
             continue
@@ -4091,6 +4100,30 @@ class Handler(BaseHTTPRequestHandler):
                 "quality": body.get("quality", t.get("quality")),
                 "steps": body.get("steps", t.get("steps")),
             }
+            # 链式重生成：除第一段外，用上一段最新任务末帧接本段首帧
+            if body.get("chain_mode"):
+                pt_segs = (st.get("project") or {}).get("prompt_tasks") or []
+                seg_idx = next(
+                    (i for i, s in enumerate(pt_segs)
+                     if str(s.get("name") or "") == str(t.get("name") or "")
+                     or str(t.get("name") or "").startswith(str(s.get("name") or "") + "_")),
+                    None,
+                )
+                if seg_idx is not None and seg_idx > 0:
+                    prev_seg = pt_segs[seg_idx - 1]
+                    pname = str(prev_seg.get("name") or "")
+                    pc = [
+                        x for x in st.get("tasks", [])
+                        if (x.get("name") == pname or str(x.get("name") or "").startswith(pname + "_"))
+                        and x.get("output_file") and x.get("downloaded")
+                    ]
+                    pc.sort(key=lambda x: str(x.get("submitted_at") or ""))
+                    if pc:
+                        new_task["chain_prev"] = pc[-1]["id"]
+                        new_task["chain_waiting"] = True
+                    else:
+                        self._send(400, json.dumps({"error": f"上一段「{pname}」还没有视频，无法链式重生成"}, ensure_ascii=False))
+                        return
             # 可选：把新提示词永久写回项目提示词库
             if body.get("save_to_project"):
                 new_prompt = new_task["prompt"]
@@ -4116,7 +4149,10 @@ class Handler(BaseHTTPRequestHandler):
                         st2["projects"] = projects2
                     save_state(st2)
             server = st.get("server") or DEFAULT_SERVER
-            results, err = submit_tasks(server, [new_task], auto_download=True, chain_mode=False)
+            results, err = submit_tasks(
+                server, [new_task], auto_download=True,
+                chain_mode=bool(body.get("chain_mode")),
+            )
             if err:
                 self._send(400, json.dumps({"error": err}, ensure_ascii=False))
                 return

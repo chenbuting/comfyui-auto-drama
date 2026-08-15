@@ -662,6 +662,13 @@
     </div>
     <div class="hint" style="margin:10px 0">参考图：<span id="regenRefs"></span></div>
     <label class="field" style="flex-direction:row;align-items:center;gap:8px;margin:8px 0">
+      <input type="checkbox" id="regenChain" style="width:auto">
+      🔗 链式衔接（用上一段末帧接本段首帧，保证画面连续）
+    </label>
+    <div class="hint" style="font-size:11px;color:var(--muted);margin:-2px 0 8px 26px">
+      除第一段外自动勾选；第一段没有上一段，无需链式
+    </div>
+    <label class="field" style="flex-direction:row;align-items:center;gap:8px;margin:8px 0">
       <input type="checkbox" id="regenSaveProject" style="width:auto">
       💾 同时更新到项目提示词库（以后第 4/6 步都用这版提示词）
     </label>
@@ -669,7 +676,7 @@
       ✅ 勾选 = 永久保存：修改的提示词写回项目，第 4/6 步与后续合成都用新版<br>
       ⚡ 不勾选 = 只对这一次生成生效：本次用新提示词出片，项目提示词库保持不变
     </div>
-    <div class="hint" style="margin-bottom:14px">注：重新生成为单段重跑，不参与链式衔接；如需整链请用第 7 步的链式提交。</div>
+    <div class="hint" style="margin-bottom:14px">勾选链式后，本段会等待上一段最新视频完成，自动抽末帧接续生成。</div>
     <div class="row" style="justify-content:flex-end;gap:10px">
       <button class="btn" id="btnRegenCancel">取消</button>
       <button class="btn blue" id="btnRegenOk">🔄 提交重新生成</button>
@@ -1570,6 +1577,11 @@ async function regenerateVideo(taskId) {
     $('regenSteps').value = String(t.steps || (t.quality === 'final' ? 20 : 4));
     $('regenMp').value = String(t.mp || 1.0);
     $('regenRefs').textContent = (t.images || []).join('、') || '无';
+    // 链式：根据任务名在剧本中的段序号自动勾选（第一段禁用）
+    const segIdx = promptTasks.findIndex(s =>
+      (t.name || '') === (s.name || '') || (t.name || '').startsWith((s.name || '') + '_'));
+    $('regenChain').disabled = segIdx <= 0;
+    $('regenChain').checked = segIdx > 0;
     $('regenModalBg').style.display = 'flex';
   } catch (e) { toast('加载任务详情失败：' + e.message, true); }
 }
@@ -1586,6 +1598,7 @@ async function regenSubmit() {
         quality: $('regenQuality').value,
         steps: parseInt($('regenSteps').value, 10),
         mp: parseFloat($('regenMp').value),
+        chain_mode: $('regenChain').checked,
         save_to_project: $('regenSaveProject').checked,
       }),
     });
