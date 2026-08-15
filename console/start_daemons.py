@@ -45,7 +45,26 @@ def spawn(name, args):
     return p
 
 
+def kill_existing(name):
+    """杀掉同名旧进程，防止重复守护实例互相竞争。"""
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", f"{name}\\.py"],
+            capture_output=True, text=True,
+        )
+        for pid in out.stdout.split():
+            try:
+                os.kill(int(pid), 15)
+                print(f"[start] 已停止旧 {name} 实例 pid={pid}", flush=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def main():
+    kill_existing("batch_console")
+    kill_existing("chain_daemon")
     web = spawn("batch_console", ["batch_console.py", "8890"])
     daemon = spawn("chain_daemon", ["chain_daemon.py"])
     print(f"web pid={web.pid}, daemon pid={daemon.pid}", flush=True)
