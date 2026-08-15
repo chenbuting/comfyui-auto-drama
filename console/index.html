@@ -1285,8 +1285,12 @@ async function refreshStatus() {
       const del = (t.downloaded || (t.outputs || []).length)
         ? `<button class="btn" style="padding:3px 8px;font-size:11px;color:var(--red)" onclick="deleteVideo('${escAttr(t.id)}')">🗑️ 删除</button>`
         : '';
+      const regen = t.status === 'completed'
+        ? `<button class="btn" style="padding:3px 8px;font-size:11px;color:var(--blue)" onclick="regenerateVideo('${escAttr(t.id)}')">🔄 重新生成</button>`
+        : '';
       return `<div class="card-item${active ? ' generating' : ''}"><div class="r1"><span class="name">${esc(t.name)}</span><span style="display:flex;align-items:center;gap:7px">${spin}${pill(t.status)}</span></div>
-        <div class="meta">${t.mode.toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}</div>${outs}${err}${del}</div>`;
+        <div class="meta">${t.mode.toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}</div>${outs}${err}
+        <div class="row" style="margin-top:8px">${regen}${del}</div></div>`;
     }).join('')}</div>`;
   } catch (e) { $('statusCards').innerHTML = '<div class="empty">状态刷新失败</div>'; }
 }
@@ -1485,6 +1489,20 @@ async function deleteVideo(taskId) {
     refreshStatus();
     loadAssembleHistory();
   } catch (e) { toast('删除失败：' + e.message, true); }
+}
+
+async function regenerateVideo(taskId) {
+  if (!confirm('用该任务的提示词/参考图/参数重新生成一版吗？会作为新版本提交。')) return;
+  try {
+    const r = await fetch('/api/regenerate', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({task_id: taskId}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '重新生成失败', true); return; }
+    toast('🔄 已提交重新生成（新版本会自动加序号）');
+    refreshStatus();
+    startPoll();
+  } catch (e) { toast('重新生成失败：' + e.message, true); }
 }
 
 async function deleteAssembled(filename) {

@@ -4056,6 +4056,36 @@ class Handler(BaseHTTPRequestHandler):
             save_state(st)
             self._send(200, json.dumps({"deleted": True, "task_id": task_id}, ensure_ascii=False))
             return
+        if path == "/api/regenerate":
+            """用原任务的提示词/参考图/参数重新生成一版（新任务自动加 _vN 后缀）。"""
+            task_id = str(body.get("task_id") or "")
+            st = load_state()
+            t = next((x for x in st.get("tasks", []) if x.get("id") == task_id), None)
+            if not t:
+                self._send(404, json.dumps({"error": "任务不存在"}, ensure_ascii=False))
+                return
+            new_task = {
+                "id": t["id"] + "_r" + uuid.uuid4().hex[:6],
+                "name": str(t.get("name") or t["id"]),
+                "mode": t.get("mode"),
+                "duration": t.get("duration"),
+                "mp": t.get("mp"),
+                "prefix": t.get("prefix"),
+                "image": t.get("image"),
+                "images": t.get("images") or [],
+                "story_image": t.get("story_image"),
+                "ref_video": t.get("ref_video"),
+                "prompt": t.get("prompt", ""),
+                "quality": t.get("quality"),
+                "steps": t.get("steps"),
+            }
+            server = st.get("server") or DEFAULT_SERVER
+            results, err = submit_tasks(server, [new_task], auto_download=True, chain_mode=False)
+            if err:
+                self._send(400, json.dumps({"error": err}, ensure_ascii=False))
+                return
+            self._send(200, json.dumps({"results": results}, ensure_ascii=False))
+            return
         if path == "/api/delete_assembled":
             """删除合成视频（素材目录 合成_*.mp4）。"""
             filename = str(body.get("filename") or "")
