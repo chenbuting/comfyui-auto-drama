@@ -1622,30 +1622,55 @@ async function loadAssembleHistory() {
   } catch (e) { box.innerHTML = '<div class="hint">历史加载失败</div>'; }
 }
 
-let histShowAll = false;
 let histCache = [];
+let histPage = 0;
+const histPageSize = 9;
+let histSelected = {};
 function renderAssembleHistory() {
   const box = $('assembleHistory');
   if (!box) return;
   const files = histCache || [];
-  const show = histShowAll ? files : files.slice(0, 6);
-  box.innerHTML = files.length
-      ? `<div class="cards">${show.map(f => `
+  if (!files.length) { box.innerHTML = '<div class="hint">还没有合成记录，点「一键合成」生成第一版</div>'; return; }
+  const pages = Math.ceil(files.length / histPageSize);
+  const show = files.slice(histPage * histPageSize, (histPage + 1) * histPageSize);
+  const selN = Object.keys(histSelected).filter(k => histSelected[k]).length;
+  box.innerHTML = `<div class="cards">${show.map(f => `
           <div class="card-item">
             <div class="r1"><span class="name" style="font-size:12px">${esc(f.filename)}</span></div>
             <div class="meta">${esc(f.mtime)} · ${(f.size / 1048576).toFixed(1)}MB</div>
             <video src="/media/${encodeURIComponent(f.filename)}" controls preload="none" style="width:100%;border-radius:8px;max-height:220px;background:#000"></video>
             <div class="row" style="margin-top:6px">
               <a href="/media/${encodeURIComponent(f.filename)}" download style="color:var(--blue);font-size:12px">⬇️ 下载</a>
+              <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:3px">
+                <input type="checkbox" data-hsel="${escAttr(f.filename)}" ${histSelected[f.filename] ? 'checked' : ''}
+                  onchange="histSelected[this.dataset.hsel]=this.checked;renderAssembleHistory()"> 合并
+              </label>
               <button class="btn" style="padding:3px 8px;font-size:11px;color:var(--red)" onclick="deleteAssembled('${escAttr(f.filename)}')">🗑️ 删除</button>
             </div>
           </div>`).join('')}</div>`
-        + (files.length > show.length
-          ? `<div style="text-align:center;margin-top:10px">
-               <button class="btn" onclick="histShowAll=!histShowAll;renderAssembleHistory()">${histShowAll ? '▲ 收起' : `▼ 加载更多（共 ${files.length} 个合成视频）`}</button>
-             </div>`
-          : '')
-      : '<div class="hint">还没有合成记录，点「一键合成」生成第一版</div>';
+    + `<div class="row" style="margin-top:10px;justify-content:center;gap:12px;align-items:center">
+         <button class="btn" ${histPage === 0 ? 'disabled' : ''} onclick="histPage>0&&(histPage--,renderAssembleHistory())">← 上一页</button>
+         <span class="hint">第 ${histPage * histPageSize + 1}-${Math.min((histPage + 1) * histPageSize, files.length)} / ${files.length} 个</span>
+         <button class="btn" ${histPage >= pages - 1 ? 'disabled' : ''} onclick="histPage<${pages - 1}&&(histPage++,renderAssembleHistory())">下一页 →</button>
+         <button class="btn green" style="margin-left:8px" ${selN ? '' : 'disabled'} onclick="mergeSelected()">🔗 合并选中（${selN}）</button>
+       </div>`;
+}
+
+async function mergeSelected() {
+  const files = Object.keys(histSelected).filter(k => histSelected[k]);
+  if (!files.length) { toast('请先勾选要合并的合成视频', true); return; }
+  askConfirm(`将按勾选顺序合并 ${files.length} 个合成视频（用于批次结果合完整片），确定？`, async () => {
+    try {
+      const r = await fetch('/api/assemble_selected', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({files}),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error || '合并失败', true); return; }
+      histSelected = {};
+      loadAssembleHistory();
+      toast(`✅ 已合并生成：${d.filename}`);
+    } catch (e) { toast('合并失败：' + e.message, true); }
+  });
 }
 
 async function deleteVideo(taskId) {

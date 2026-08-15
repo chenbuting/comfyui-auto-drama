@@ -487,7 +487,7 @@ def assemble_project_video(project_name="", selection=None, seg_range=None, prog
                 f.write(f"file '{p.replace(os.sep, '/')}'\n")
         base = _slug(project_name or "项目") or "project"
         outname = f"合成_{base}{seg_label}_{int(time.time())}.mp4"
-        dest = os.path.join(IMAGE_DIRS[1], outname)
+        dest = os.path.join(IMAGE_DIRS[0], outname)
         r = subprocess.run(
             ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", dest],
             capture_output=True,
@@ -2653,7 +2653,7 @@ def _boogu_local(prompt, filename, size="768x1024", timeout=300):
     raw = base64.b64decode(b64)
     if not filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
         filename += ".png"
-    dest = os.path.join(IMAGE_DIRS[1], filename)
+    dest = os.path.join(IMAGE_DIRS[0], filename)
     with open(dest, "wb") as f:
         f.write(raw)
     return filename, dest
@@ -3609,7 +3609,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             try:
                 raw = base64.b64decode(data_b64)
-                dest = os.path.join(IMAGE_DIRS[1], filename)
+                dest = os.path.join(IMAGE_DIRS[0], filename)
                 with open(dest, "wb") as f:
                     f.write(raw)
             except Exception as e:
@@ -4062,6 +4062,60 @@ class Handler(BaseHTTPRequestHandler):
                 seg_range = None
             tid = start_assemble_job(project_name, body.get("selection") or {}, seg_range)
             self._send(200, json.dumps({"task_id": tid}, ensure_ascii=False))
+            return
+        if path == "/api/assemble_selected":
+            """二次/多次合并：把选中的已合成视频按顺序拼接（用于批次结果合完整片）。"""
+            files = body.get("files") or []
+            if not isinstance(files, list) or not files:
+                self._send(400, json.dumps({"error": "请先选择要合并的合成视频"}, ensure_ascii=False))
+                return
+            srcs = []
+            for fn in files:
+                fn = str(fn or "")
+                if not fn.startswith("合成_") or not fn.lower().endswith(".mp4"):
+                    self._send(400, json.dumps({"error": f"非法的合成文件名：{fn}"}, ensure_ascii=False))
+                    return
+                p = None
+                for d in IMAGE_DIRS:
+                    cand = os.path.join(d, fn)
+                    if os.path.isfile(cand):
+                        p = cand
+                        break
+                if not p:
+                    self._send(404, json.dumps({"error": f"文件不存在：{fn}"}, ensure_ascii=False))
+                    return
+                srcs.append(p)
+            st = load_state()
+            proj = st.get("project") or {}
+            base = _slug(proj.get("name") or "项目") or "项目"
+            outname = f"合成_{base}_合并_{int(time.time())}.mp4"
+            dest = os.path.join(IMAGE_DIRS[0], outname)
+            tmpdir = tempfile.mkdtemp(prefix="merge_")
+            try:
+                segs = []
+                for i, src in enumerate(srcs):
+                    seg = os.path.join(tmpdir, f"seg_{i}.mp4")
+                    r = subprocess.run(
+                        ["ffmpeg", "-y", "-i", src, "-c:v", "libx264", "-preset", "fast",
+                         "-crf", "20", "-c:a", "aac", "-ar", "44100", "-pix_fmt", "yuv420p", seg],
+                        capture_output=True,
+                    )
+                    if r.returncode != 0 or not os.path.exists(seg):
+                        raise RuntimeError(f"转码失败：{src}")
+                    segs.append(seg)
+                listfile = os.path.join(tmpdir, "list.txt")
+                with open(listfile, "w", encoding="utf-8") as f:
+                    for p in segs:
+                        f.write(f"file '{p.replace(os.sep, '/')}'\n")
+                r = subprocess.run(
+                    ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", dest],
+                    capture_output=True,
+                )
+                if r.returncode != 0 or not os.path.exists(dest):
+                    raise RuntimeError(f"合并失败：{r.stderr.decode('utf-8', 'ignore')[-200:]}")
+            finally:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            self._send(200, json.dumps({"filename": outname}, ensure_ascii=False))
             return
         if path == "/api/export":
             tasks = body.get("tasks", [])
