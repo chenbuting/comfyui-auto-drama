@@ -396,6 +396,9 @@
       <div class="desc">勾选链式衔接则上段末帧自动接下一段首帧；提交后实时监控。</div>
       <div class="row">
         <label style="font-size:13px"><input type="checkbox" id="chainMode"> 🔗 链式衔接（上段末帧 → 下段首帧）</label>
+        <div class="hint" style="font-size:11px;margin:2px 0 8px 0;width:100%">
+          ⚠️ 连续剧情**中间段必须**承接上一段末帧，否则人物/场景会跳变。多段时默认勾选（第 2 段起自动用上段末帧接本段首帧）；每段独立场景的短剧可取消。
+        </div>
         <label style="font-size:13px"><input type="checkbox" id="qualityMode" checked> 🎧 成片质量（无加速LoRA·20步，声音清晰，慢）</label>
         <label style="font-size:13px">步数
           <select id="stepsMode" style="width:150px">
@@ -1827,6 +1830,10 @@ async function loadProject() {
     if (p.prompt_tasks && p.prompt_tasks.length) {
       promptTasks = p.prompt_tasks;
       renderPromptCards();
+      // 多段连续剧情：未显式设置过 chain_mode 时默认勾选链式衔接
+      if (typeof p.chain_mode !== 'boolean' && p.prompt_tasks.length > 1) {
+        $('chainMode').checked = true;
+      }
     }
     if (p.asset_imgs) assetImgs = p.asset_imgs;
     if (p.asset_prompts) assetPrompts = p.asset_prompts;
