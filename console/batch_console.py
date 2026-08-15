@@ -3800,9 +3800,8 @@ class Handler(BaseHTTPRequestHandler):
                 ]
                 if p.get("submitted_at") or p.get("submitted_task_names") or matched:
                     progress = 5
-                # 段级出片：每段 prompt_tasks 对应的"同名最新任务"必须
-                # 晚于提示词最后更新时间且已下载，才算出片
-                p_updated = p.get("prompt_updated_at") or p.get("updated_at") or ""
+                # 段级出片：每段只要有同名任务完整出片过（下载过视频）就算完成；
+                # 重跑/二次生成是独立版本（记入 generation_log），不回退项目进度
                 pt_segs = p.get("prompt_tasks") or []
                 seg_done = 0
                 for seg in pt_segs:
@@ -3812,12 +3811,9 @@ class Handler(BaseHTTPRequestHandler):
                     sc = [t for t in tasks
                           if t.get("name") == sname
                           or str(t.get("name") or "").startswith(sname + "_")]
-                    sc.sort(key=lambda x: str(x.get("submitted_at") or ""))
                     if not sc:
                         continue
-                    latest = sc[-1]
-                    if (latest.get("downloaded") or latest.get("output_file")) \
-                            and p_updated and str(latest.get("submitted_at") or "") >= p_updated:
+                    if any(t.get("downloaded") or t.get("output_file") for t in sc):
                         seg_done += 1
                 seg_total = len(pt_segs)
                 if progress >= 5 and seg_total and seg_done == seg_total:
