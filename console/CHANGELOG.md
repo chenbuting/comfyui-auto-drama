@@ -5,6 +5,33 @@
 
 ---
 
+## 2026-08-15 · v0.10.0 — 开源化重构（全配置化 + 目录归拢 + 云端模型）
+
+### 本次更新内容
+
+- **全配置化**：新增项目根 `config.json`（模板 `config.example.json`，说明见 `CONFIG.md`）：
+  ComfyUI 服务器/工作流目录、存储路径、语言模型（本地 + 云端 OpenAI 兼容 API）、
+  文生图（本地 + 云端）、视觉质检、TTS、控制台端口
+- **云端模型支持**：`llm` / `image_gen` 配置 `provider: local|cloud`，主端点失败自动降级备用；
+  设置抽屉新增"本地/云端模型"切换 + 云端 Key 填写（保存写 config.json，自动备份旧文件）
+- **去绝对路径**：`make_cta_layer.py` / `make_subtitles.py` 改为相对路径 + 环境变量覆盖
+- **目录归拢**：`console/`（原 batch_console）、`workflows/`、`scripts/`、`examples/`；
+  个人内容（口播稿、技能整理、素材、录屏、生成记录等）移入 `_private/` 并 gitignore
+- **开源文档**：README、CONFIG.md、LICENSE（MIT）、requirements.txt、示例演示剧本
+- **git 初始化**：首次提交完成，`.gitignore` 覆盖配置密钥/运行时数据/素材/个人内容
+
+### 验证方式
+
+- `python3 -m py_compile` + `node --check` 通过
+- 新路径下服务启动正常，`/api/config` 返回配置，`build_graphs` 从 workflows/ 加载模板成功
+- `git status` 确认无 console.db / 素材 / token / 个人文档
+
+### 影响与注意事项
+
+- 启动路径变为 `cd console && python3 start_daemons.py`；`config.json` 不入 git（含 Key 风险）
+
+---
+
 ## 2026-08-15 · v0.9.1 — 记录倒序 + 资产表批准状态说明
 
 ### 本次更新内容
