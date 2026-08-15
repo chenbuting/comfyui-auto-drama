@@ -2934,7 +2934,7 @@ def start_expand_job(text, token=""):
                 scene = str(_pick(sb, "scene", "location", "scene_name") or "").strip()
                 job["current"] = f"第 {i + 1}/{len(storyboards)} 段" + (f" · {scene}" if scene else "")
                 existing_p = str(existing[i].get("prompt") or "") if i < len(existing) else ""
-                if len(existing_p) > 800 and "overall_soundscape" in existing_p and "non_diegetic_music" in existing_p:
+                if _is_full_prompt(existing_p):
                     rows[i]["prompt"] = existing_p
                     prev_p = existing_p
                     job["done"] = i + 1
@@ -2973,6 +2973,18 @@ def start_expand_job(text, token=""):
             job["current"] = ""
     threading.Thread(target=work, daemon=True).start()
     return tid
+
+
+def _is_full_prompt(p):
+    """判定一段提示词是否为完整 AI 扩写（>600 字且三段式齐全）。
+    规则回退模板约 400-470 字，AI 完整版一般 700+ 字。"""
+    p = str(p or "")
+    return (
+        len(p) > 600
+        and "integrated_multimodal_description" in p
+        and "overall_soundscape" in p
+        and "non_diegetic_music" in p
+    )
 
 
 def _save_expand_progress(rows, tid, final=False):
@@ -3997,6 +4009,8 @@ class Handler(BaseHTTPRequestHandler):
                 seg_total = len(pt_segs)
                 if progress >= 5 and seg_total and seg_done == seg_total:
                     progress = 6
+                # 提示词完成度：完整扩写（>800 字且三段式）的段数
+                prompt_done = sum(1 for s in pt_segs if _is_full_prompt(s.get("prompt")))
                 rows.append({
                     "name": name,
                     "type": p.get("type", ""),
@@ -4015,6 +4029,8 @@ class Handler(BaseHTTPRequestHandler):
                     },
                     "seg_done": seg_done,
                     "seg_total": seg_total,
+                    "prompt_done": prompt_done,
+                    "prompt_total": seg_total,
                     "has_script": bool(p.get("current_script") or p.get("script_before")),
                     "has_prompt": bool(p.get("prompt_tasks")),
                     "current": name == cur_name,

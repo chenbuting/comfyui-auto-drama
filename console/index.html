@@ -326,6 +326,12 @@
         <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="promptLlm" checked> AI 智能扩写（慢但完整）</label>
         <span class="hint" id="promptHint"></span>
       </div>
+      <div id="promptProgress" style="display:none;margin-top:10px">
+        <div style="height:8px;background:#e2e8f0;border-radius:99px;overflow:hidden">
+          <div id="promptBar" style="height:100%;width:0%;background:var(--blue);transition:width .4s"></div>
+        </div>
+        <div class="hint" id="promptProgressText" style="font-size:11px;margin-top:4px"></div>
+      </div>
       <div id="promptCards"></div>
     </div>
   </section>
@@ -823,7 +829,7 @@ async function renderProjects() {
           <div class="proj-meta">${esc(p.type || '')} · ${esc(p.aspect || '')} · ${esc(p.budget || '')} · ${esc(p.updated_at || '')}</div>
           <div class="proj-progress">
             <span class="proj-bar"><span style="width:${Math.max(3, ((p.progress || 0) + 1) / 7 * 100)}%"></span></span>
-            <span class="proj-prog-label">进度 ${Math.min((p.progress || 0) + 1, 7)}/7 · ${PROGRESS_LABELS[p.progress || 0]}${p.seg_total ? ` · 已出片 ${p.seg_done || 0}/${p.seg_total} 段` : ''}</span>
+            <span class="proj-prog-label">进度 ${Math.min((p.progress || 0) + 1, 7)}/7 · ${PROGRESS_LABELS[p.progress || 0]}${p.prompt_total ? ` · 提示词 ${p.prompt_done || 0}/${p.prompt_total} 段` : ''}${p.seg_total ? ` · 已出片 ${p.seg_done || 0}/${p.seg_total} 段` : ''}</span>
           </div>
         </div>
         <div class="proj-actions">
@@ -1184,12 +1190,29 @@ function pollExpandTask(tid) {
   const btn = $('btnBuildPrompts');
   btn.disabled = true; btn.textContent = '✨ AI 扩写中…';
   toastLoading('✨ AI 扩写进行中，页面刷新不影响生成…');
+  const startTime = Date.now();
+  $('promptProgress').style.display = '';
+  $('promptBar').style.width = '0%';
   const poll = setInterval(async () => {
     try {
       const pr = await fetch(`/api/expand_progress?task_id=${encodeURIComponent(tid)}`);
       const pd = await pr.json();
       if (pd.status === 'running' || pd.status === 'queued') {
-        $('promptHint').textContent = `🤖 扩写中：${pd.done}/${pd.total} 段完成${pd.current ? ' · ' + pd.current : ''}（约 1 分钟/段）`;
+        const total = pd.total || 1;
+        const done = pd.done || 0;
+        $('promptBar').style.width = `${Math.round(done / total * 100)}%`;
+        // 剩余时间估算：按已用耗时推算每段平均时长
+        let remain = '';
+        const elapsedMin = (Date.now() - startTime) / 60000;
+        if (done > 0 && done < total) {
+          const perSeg = elapsedMin / done;
+          const remainMin = Math.ceil(perSeg * (total - done));
+          remain = remainMin > 60
+            ? `预计剩余约 ${Math.floor(remainMin / 60)} 小时 ${remainMin % 60} 分钟`
+            : `预计剩余约 ${remainMin} 分钟`;
+        }
+        $('promptProgressText').textContent = `第 ${done + 1}/${total} 段${pd.current ? ' · ' + pd.current : ''} · 已完成 ${done} 段${remain ? ' · ' + remain : ''}`;
+        $('promptHint').textContent = `🤖 扩写中：${done}/${total} 段完成`;
         // 每段完成即保存，实时拉取渲染已完成段
         try {
           const pr2 = await fetch('/api/project', {
@@ -1200,11 +1223,13 @@ function pollExpandTask(tid) {
           if (saved.length && saved.length !== promptTasks.length) {
             promptTasks = saved;
             renderPromptCards();
+            renderProjects();
           }
         } catch (e) {}
       } else {
         clearInterval(poll);
         toastClear();
+        $('promptProgress').style.display = 'none';
         btn.disabled = false; btn.textContent = '✨ 生成 H3 规范提示词';
         if (pd.status === 'done') {
           promptTasks = pd.tasks || [];
