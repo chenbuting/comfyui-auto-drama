@@ -377,14 +377,47 @@ def detect_lead_noise_sec(video_path):
 
 
 def assemble_project_video(project_name=""):
-    """把项目所有已下载的视频段按提交顺序合成。返回 (filename, 绝对路径)。"""
+    """按项目剧本顺序合成完整视频。
+
+    规则：取项目 prompt_tasks 的段顺序；每段取"同名任务中最新提交且已下载"的一版
+    （任务名可能带 _v2/_v6 后缀，同名匹配）。没有 prompt_tasks 时回退为按提交顺序
+    拼接所有已下载任务。
+    返回 (filename, 绝对路径)。
+    """
     st = load_state()
-    tasks = [t for t in st.get("tasks", []) if t.get("output_file") and t.get("downloaded")]
-    if not tasks:
+    proj = st.get("project") or {}
+    pt = proj.get("prompt_tasks") or []
+    all_tasks = st.get("tasks", [])
+    src_meta = []
+    if pt:
+        missing = []
+        for seg in pt:
+            sname = str(seg.get("name") or "")
+            if not sname:
+                continue
+            cands = [
+                t for t in all_tasks
+                if (t.get("name") == sname or str(t.get("name") or "").startswith(sname + "_"))
+                and t.get("output_file") and t.get("downloaded")
+            ]
+            cands.sort(key=lambda x: str(x.get("submitted_at") or ""))
+            if cands:
+                latest = cands[-1]
+                of = latest["output_file"]
+                src_meta.append((sname, of))
+            else:
+                missing.append(sname)
+        if missing:
+            raise RuntimeError(f"以下段还没有视频，无法合成：{'、'.join(missing)}")
+    else:
+        # 回退：无剧本时按提交顺序拼接所有已下载任务
+        for t in all_tasks:
+            if t.get("output_file") and t.get("downloaded"):
+                src_meta.append((str(t.get("name") or ""), t["output_file"]))
+    if not src_meta:
         raise RuntimeError("项目还没有已下载的视频段")
     src_files = []
-    for t in tasks:
-        of = t["output_file"]
+    for sname, of in src_meta:
         p = os.path.join(OUTPUTS_DIR, of.get("type", "output"), of.get("subfolder", ""), of.get("filename", ""))
         if os.path.isfile(p):
             src_files.append(p)
