@@ -4034,6 +4034,49 @@ class Handler(BaseHTTPRequestHandler):
             n = clear_history(keep)
             self._send(200, json.dumps({"cleared": True, "remaining": n}, ensure_ascii=False))
             return
+        if path == "/api/delete_video":
+            """删除某任务的生成视频（本地文件 + 任务下载标记）。"""
+            task_id = str(body.get("task_id") or "")
+            st = load_state()
+            tasks = st.get("tasks", [])
+            t = next((x for x in tasks if x.get("id") == task_id), None)
+            if not t or not t.get("output_file"):
+                self._send(404, json.dumps({"error": "任务或视频不存在"}, ensure_ascii=False))
+                return
+            of = t["output_file"]
+            p = os.path.join(OUTPUTS_DIR, of.get("type", "output"), of.get("subfolder", ""), of.get("filename", ""))
+            if os.path.isfile(p):
+                try:
+                    os.remove(p)
+                except OSError as e:
+                    self._send(400, json.dumps({"error": f"删除失败：{e}"}, ensure_ascii=False))
+                    return
+            t["downloaded"] = False
+            t["output_file"] = None
+            save_state(st)
+            self._send(200, json.dumps({"deleted": True, "task_id": task_id}, ensure_ascii=False))
+            return
+        if path == "/api/delete_assembled":
+            """删除合成视频（素材目录 合成_*.mp4）。"""
+            filename = str(body.get("filename") or "")
+            if not filename or not filename.startswith("合成_") or not filename.lower().endswith(".mp4"):
+                self._send(400, json.dumps({"error": "非法的合成文件名"}, ensure_ascii=False))
+                return
+            deleted = False
+            for d in IMAGE_DIRS:
+                p = os.path.join(d, filename)
+                if os.path.isfile(p):
+                    try:
+                        os.remove(p)
+                        deleted = True
+                    except OSError as e:
+                        self._send(400, json.dumps({"error": f"删除失败：{e}"}, ensure_ascii=False))
+                        return
+            if not deleted:
+                self._send(404, json.dumps({"error": "文件不存在"}, ensure_ascii=False))
+                return
+            self._send(200, json.dumps({"deleted": True, "filename": filename}, ensure_ascii=False))
+            return
         self._send(404, json.dumps({"error": "not found"}, ensure_ascii=False))
 
 

@@ -1282,8 +1282,11 @@ async function refreshStatus() {
         ? `<span class="pill error" title="查看第 8 步失败码速查表">${esc(t.failure_code)}</span>`
         : '';
       const err = t.error ? `<div class="outs" style="color:var(--red)">${fc} ${esc(t.error)}</div>` : '';
+      const del = (t.downloaded || (t.outputs || []).length)
+        ? `<button class="btn" style="padding:3px 8px;font-size:11px;color:var(--red)" onclick="deleteVideo('${escAttr(t.id)}')">🗑️ 删除</button>`
+        : '';
       return `<div class="card-item${active ? ' generating' : ''}"><div class="r1"><span class="name">${esc(t.name)}</span><span style="display:flex;align-items:center;gap:7px">${spin}${pill(t.status)}</span></div>
-        <div class="meta">${t.mode.toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}</div>${outs}${err}</div>`;
+        <div class="meta">${t.mode.toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}</div>${outs}${err}${del}</div>`;
     }).join('')}</div>`;
   } catch (e) { $('statusCards').innerHTML = '<div class="empty">状态刷新失败</div>'; }
 }
@@ -1463,10 +1466,38 @@ async function loadAssembleHistory() {
             <video src="/media/${encodeURIComponent(f.filename)}" controls preload="metadata" style="width:100%;border-radius:8px;max-height:220px;background:#000"></video>
             <div class="row" style="margin-top:6px">
               <a href="/media/${encodeURIComponent(f.filename)}" download style="color:var(--blue);font-size:12px">⬇️ 下载</a>
+              <button class="btn" style="padding:3px 8px;font-size:11px;color:var(--red)" onclick="deleteAssembled('${escAttr(f.filename)}')">🗑️ 删除</button>
             </div>
           </div>`).join('')}</div>`
       : '<div class="hint">还没有合成记录，点「一键合成」生成第一版</div>';
   } catch (e) { box.innerHTML = '<div class="hint">历史加载失败</div>'; }
+}
+
+async function deleteVideo(taskId) {
+  if (!confirm('确定删除这个任务的视频文件吗？删除后可重新生成。')) return;
+  try {
+    const r = await fetch('/api/delete_video', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({task_id: taskId}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '删除失败', true); return; }
+    toast('🗑️ 视频已删除');
+    refreshStatus();
+    loadAssembleHistory();
+  } catch (e) { toast('删除失败：' + e.message, true); }
+}
+
+async function deleteAssembled(filename) {
+  if (!confirm('确定删除这个合成视频吗？删除后不可恢复。')) return;
+  try {
+    const r = await fetch('/api/delete_assembled', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({filename}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '删除失败', true); return; }
+    toast('🗑️ 合成视频已删除');
+    loadAssembleHistory();
+  } catch (e) { toast('删除失败：' + e.message, true); }
 }
 
 async function clearHistory() {
