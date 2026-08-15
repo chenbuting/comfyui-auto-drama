@@ -49,11 +49,13 @@ _CONFIG_DEFAULTS = {
     "storage": {"output_dir": "comfyui_backup/outputs", "asset_dirs": ["素材", "出镜素材"]},
     "llm": {
         "provider": "local",
+        "provider_type": "openai",
         "local": {"url": "http://127.0.0.1:1234", "model": "qwen3.6-27b-abliterated-mlx", "token": ""},
         "cloud": {"enabled": False, "base_url": "https://api.openai.com/v1", "api_key": "", "model": "gpt-4o-mini"},
     },
     "image_gen": {
         "provider": "local",
+        "provider_type": "openai",
         "local": {"url": "http://127.0.0.1:8081"},
         "cloud": {"enabled": False, "base_url": "https://api.openai.com/v1", "api_key": "", "model": "gpt-image-1"},
     },
@@ -2273,20 +2275,31 @@ def _v1(url):
     return url + "/v1"
 
 
+def _strip_v1(url):
+    """去掉 URL 尾部的 /v1（DashScope 原生 API 需要不带 /v1 的根地址）。"""
+    url = str(url or "").rstrip("/")
+    if url.endswith("/v1"):
+        return url[:-3].rstrip("/")
+    return url
+
+
 def _llm_endpoints():
     """返回 (主端点, 备用端点)；端点 dict：{url, api_key, model, provider}。"""
     cfg = _CONFIG["llm"]
+    ptype = str(cfg.get("provider_type") or "openai").strip() or "openai"
     local = {
         "url": str(cfg["local"]["url"] or "").rstrip("/"),
         "api_key": str(cfg["local"]["token"] or "").strip(),
         "model": str(cfg["local"]["model"] or "").strip(),
         "provider": "local",
+        "provider_type": "openai",
     }
     cloud = {
         "url": str(cfg["cloud"]["base_url"] or "").rstrip("/"),
         "api_key": str(cfg["cloud"]["api_key"] or "").strip(),
         "model": str(cfg["cloud"]["model"] or "").strip(),
         "provider": "cloud",
+        "provider_type": ptype,
         "enabled": bool(cfg["cloud"].get("enabled")),
     }
     if str(cfg.get("provider") or "local") == "cloud":
@@ -2294,8 +2307,8 @@ def _llm_endpoints():
     return local, cloud if cloud["enabled"] and cloud["url"] else None
 
 
-def _chat_once(endpoint, messages, token="", timeout=1800):
-    """向单个 OpenAI 兼容端点发 chat 请求。endpoint 为 None 时抛异常。"""
+def _llm_openai(endpoint, messages, token="", timeout=1800):
+    """OpenAI 兼容适配器：/v1/chat/completions。"""
     if not endpoint or not endpoint.get("url"):
         raise RuntimeError("语言模型端点未配置")
     api_key = token.strip() or endpoint.get("api_key") or ""
@@ -2312,6 +2325,72 @@ def _chat_once(endpoint, messages, token="", timeout=1800):
     )
     with _opener().open(req, timeout=timeout) as r:
         return json.loads(r.read().decode("utf-8"))
+
+
+def _llm_claude(endpoint, messages, token="", timeout=1800):
+    """Claude（Anthropic Messages API）适配器：POST /v1/messages。"""
+    if not endpoint or not endpoint.get("url"):
+        raise RuntimeError("语言模型端点未配置")
+    api_key = token.strip() or endpoint.get("api_key") or ""
+    system = "\n".join(m["content"] for m in messages if m.get("role") == "system")
+    chat = [{"role": m["role"], "content": m["content"]}
+            for m in messages if m.get("role") != "system"]
+    payload = {"model": endpoint.get("model") or "claude-sonnet-4", "max_tokens": 12000}
+    if system:
+        payload["system"] = system
+    payload["messages"] = chat
+    req = urllib.request.Request(
+        endpoint["url"].rstrip("/") + "/messages",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "User-Agent": "batch-console",
+        },
+    )
+    with _opener().open(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    text = data["content"][0]["text"]
+    return {"choices": [{"message": {"content": text}}]}
+
+
+def _llm_dashscope(endpoint, messages, token="", timeout=1800):
+    """通义千问（DashScope 原生）适配器：同步 text-generation。"""
+    if not endpoint or not endpoint.get("url"):
+        raise RuntimeError("语言模型端点未配置")
+    api_key = token.strip() or endpoint.get("api_key") or ""
+    payload = {
+        "model": endpoint.get("model") or "qwen-plus",
+        "input": {"messages": messages},
+        "parameters": {"result_format": "message", "temperature": 0.6, "max_tokens": 12000},
+    }
+    req = urllib.request.Request(
+        _strip_v1(endpoint["url"]) + "/api/v1/services/aigc/text-generation/generation",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+    )
+    with _opener().open(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    text = data["output"]["choices"][0]["message"]["content"]
+    return {"choices": [{"message": {"content": text}}]}
+
+
+# 语言模型适配器注册表：config llm.provider_type 选择
+_LLM_ADAPTERS = {
+    "openai": _llm_openai,
+    "claude": _llm_claude,
+    "dashscope": _llm_dashscope,
+}
+
+
+def _chat_once(endpoint, messages, token="", timeout=1800):
+    """按端点 provider_type 选择适配器调用；统一返回 OpenAI 兼容响应结构。"""
+    if not endpoint or not endpoint.get("url"):
+        raise RuntimeError("语言模型端点未配置")
+    atype = str(endpoint.get("provider_type") or "openai").strip() or "openai"
+    fn = _LLM_ADAPTERS.get(atype) or _LLM_ADAPTERS["openai"]
+    return fn(endpoint, messages, token, timeout)
 
 
 def check_lmstudio(token="", timeout=6):
@@ -2353,12 +2432,14 @@ def boogu_check(timeout=4):
 def _image_gen_endpoints():
     """返回 (主端点, 备用端点)；image_gen 配置。"""
     cfg = _CONFIG["image_gen"]
-    local = {"url": str(cfg["local"]["url"] or "").rstrip("/"), "provider": "local"}
+    ptype = str(cfg.get("provider_type") or "openai").strip() or "openai"
+    local = {"url": str(cfg["local"]["url"] or "").rstrip("/"), "provider": "local", "provider_type": "openai"}
     cloud = {
         "url": str(cfg["cloud"]["base_url"] or "").rstrip("/"),
         "api_key": str(cfg["cloud"]["api_key"] or "").strip(),
         "model": str(cfg["cloud"]["model"] or "").strip(),
         "provider": "cloud",
+        "provider_type": ptype,
         "enabled": bool(cfg["cloud"].get("enabled")),
     }
     if str(cfg.get("provider") or "local") == "cloud":
@@ -2366,9 +2447,8 @@ def _image_gen_endpoints():
     return local, cloud if cloud["enabled"] and cloud["url"] else None
 
 
-def _image_gen_cloud(prompt, filename, size="768x1024", timeout=300):
-    """云端文生图（OpenAI /v1/images/generations 兼容，b64 返回）→ 本地文件。"""
-    ep = _image_gen_endpoints()[0]
+def _img_openai(ep, prompt, filename, size="768x1024", timeout=300):
+    """OpenAI 兼容文生图适配器（/v1/images/generations，b64 或 url 返回）。"""
     if not ep.get("url"):
         raise RuntimeError("云端文生图端点未配置")
     payload = {
@@ -2402,13 +2482,72 @@ def _image_gen_cloud(prompt, filename, size="768x1024", timeout=300):
     return filename, dest
 
 
+def _img_dashscope(ep, prompt, filename, size="768x1024", timeout=300):
+    """通义万相（DashScope）适配器：异步任务 + 轮询结果。"""
+    if not ep.get("url"):
+        raise RuntimeError("云端文生图端点未配置")
+    api_key = ep.get("api_key") or ""
+    base = ep["url"].rstrip("/")
+    payload = {
+        "model": ep.get("model") or "wanx2.1-t2i-turbo",
+        "input": {"prompt": prompt},
+        "parameters": {"size": size, "n": 1},
+    }
+    req = urllib.request.Request(
+        _strip_v1(ep["url"]) + "/api/v1/services/aigc/multimodal-generation/generation",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+            "X-DashScope-Async": "enable",
+        },
+    )
+    with _opener().open(req, timeout=timeout) as r:
+        task = json.loads(r.read().decode("utf-8"))
+    task_id = task.get("output", {}).get("task_id")
+    if not task_id:
+        raise RuntimeError(f"DashScope 未返回任务：{task}")
+    # 轮询任务结果
+    deadline = time.time() + 180
+    while time.time() < deadline:
+        time.sleep(3)
+        q = urllib.request.Request(
+            base + f"/api/v1/tasks/{task_id}",
+            headers={"Authorization": f"Bearer {api_key}"},
+        )
+        with _opener().open(q, timeout=timeout) as r:
+            st = json.loads(r.read().decode("utf-8"))
+        out = st.get("output", {})
+        status = out.get("task_status")
+        if status == "SUCCEEDED":
+            url = out.get("results", [{}])[0].get("url")
+            if not url:
+                raise RuntimeError("DashScope 任务成功但无图片 URL")
+            with _opener().open(url, timeout=timeout) as fr:
+                raw = fr.read()
+            dest = os.path.join(IMAGE_DIRS[0], filename)
+            with open(dest, "wb") as f:
+                f.write(raw)
+            return filename, dest
+        if status in ("FAILED", "CANCELED"):
+            raise RuntimeError(f"DashScope 任务失败：{st}")
+    raise RuntimeError("DashScope 任务超时")
+
+
+_IMG_ADAPTERS = {
+    "openai": _img_openai,
+    "dashscope": _img_dashscope,
+}
+
+
 def boogu_generate(prompt, filename, size="768x1024", timeout=300):
     """文生图统一入口：本地 Boogu 优先，配置云端或本地失败时降级云端。"""
     main, backup = _image_gen_endpoints()
     last_err = None
     if main.get("provider") == "cloud":
         try:
-            return _image_gen_cloud(prompt, filename, size, timeout)
+            atype = str(main.get("provider_type") or "openai").strip() or "openai"
+            return _IMG_ADAPTERS.get(atype, _img_openai)(main, prompt, filename, size, timeout)
         except Exception as e:
             last_err = e
             if backup is None or backup.get("provider") != "local":
@@ -2419,7 +2558,8 @@ def boogu_generate(prompt, filename, size="768x1024", timeout=300):
     except Exception as e:
         last_err = e
         if backup and backup.get("provider") == "cloud":
-            return _image_gen_cloud(prompt, filename, size, timeout)
+            atype = str(backup.get("provider_type") or "openai").strip() or "openai"
+            return _IMG_ADAPTERS.get(atype, _img_openai)(backup, prompt, filename, size, timeout)
         raise
 
 

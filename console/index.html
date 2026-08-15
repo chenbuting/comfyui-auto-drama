@@ -478,6 +478,13 @@
           <option value="cloud">云端 API（OpenAI 兼容）</option>
         </select>
       </label>
+      <label class="field" style="flex-direction:row;align-items:center;gap:8px">云端接口格式
+        <select id="llmProviderType" style="flex:1">
+          <option value="openai">OpenAI 兼容（DeepSeek/通义/豆包/Gemini）</option>
+          <option value="claude">Claude（Anthropic Messages）</option>
+          <option value="dashscope">通义千问（DashScope 原生）</option>
+        </select>
+      </label>
       <div id="llmCloudBox">
         <label class="field">云端接口地址（base_url）
           <input type="text" id="llmCloudUrl" placeholder="https://api.openai.com/v1">
@@ -502,6 +509,12 @@
         <select id="imgProvider" style="flex:1">
           <option value="local">本地（Boogu-Image）</option>
           <option value="cloud">云端 API（OpenAI 兼容）</option>
+        </select>
+      </label>
+      <label class="field" style="flex-direction:row;align-items:center;gap:8px">云端接口格式
+        <select id="imgProviderType" style="flex:1">
+          <option value="openai">OpenAI 兼容（gpt-image / DALL-E）</option>
+          <option value="dashscope">通义万相（DashScope 异步）</option>
         </select>
       </label>
       <div id="imgCloudBox">
@@ -1424,6 +1437,7 @@ async function loadConfigIntoForm() {
     if (c.comfyui && c.comfyui.server) $('serverInput').value = c.comfyui.server;
     const llm = c.llm || {};
     $('llmProvider').value = llm.provider || 'local';
+    if (llm.provider_type) $('llmProviderType').value = llm.provider_type;
     if (llm.local) {
       if (llm.local.url) $('llmLocalUrl').value = llm.local.url;
       if (llm.local.model) $('llmLocalModel').value = llm.local.model;
@@ -1435,6 +1449,7 @@ async function loadConfigIntoForm() {
     }
     const img = c.image_gen || {};
     $('imgProvider').value = img.provider || 'local';
+    if (img.provider_type) $('imgProviderType').value = img.provider_type;
     if (img.local && img.local.url) $('imgLocalUrl').value = img.local.url;
     if (img.cloud) {
       if (img.cloud.base_url) $('imgCloudUrl').value = img.cloud.base_url;
@@ -1454,6 +1469,7 @@ async function saveConfig() {
     cfg.comfyui.server = $('serverInput').value.trim();
     cfg.llm = {
       provider: $('llmProvider').value,
+      provider_type: $('llmProviderType').value,
       local: {url: $('llmLocalUrl').value.trim(), model: $('llmLocalModel').value.trim(), token: (cur.llm && cur.llm.local && cur.llm.local.token) || ''},
       cloud: {
         enabled: true,
@@ -1464,6 +1480,7 @@ async function saveConfig() {
     };
     cfg.image_gen = {
       provider: $('imgProvider').value,
+      provider_type: $('imgProviderType').value,
       local: {url: $('imgLocalUrl').value.trim()},
       cloud: {
         enabled: true,

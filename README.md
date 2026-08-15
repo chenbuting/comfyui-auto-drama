@@ -106,6 +106,7 @@ python3 scripts/boogu_server.py       # 启动（默认 8081）
 
 - 云端接口需兼容 OpenAI：LLM 走 `/v1/chat/completions`，文生图走 `/v1/images/generations`（支持 `b64_json` 或 `url` 返回）
 - 主端点失败会自动降级到另一侧（本地↔云端互备）
+- **不兼容 OpenAI 的服务用适配器**：LLM 支持 `provider_type: openai / claude / dashscope`（Claude 用 Messages API、通义用原生 DashScope，自动转换格式）；文生图支持 `openai / dashscope`（通义万相异步任务自动轮询）。设置抽屉里可选接口格式。
 
 ## Windows 部署
 

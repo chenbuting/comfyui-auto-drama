@@ -9,6 +9,7 @@
   },
   "llm": {
     "provider": "local",
+    "provider_type": "openai",
     "local": {
       "url": "http://127.0.0.1:1234",
       "model": "qwen3.6-27b-abliterated-mlx",
@@ -23,6 +24,7 @@
   },
   "image_gen": {
     "provider": "local",
+    "provider_type": "openai",
     "local": {
       "url": "http://127.0.0.1:8081"
     },

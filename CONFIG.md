@@ -27,6 +27,7 @@
 | 字段 | 说明 | 示例 |
 |---|---|---|
 | `provider` | 当前使用本地还是云端：`local` 或 `cloud` | `local` |
+| `provider_type` | 云端接口格式：`openai` / `claude` / `dashscope` | `openai` |
 | `local.url` | 本地 OpenAI 兼容服务地址（LM Studio / Ollama） | `http://127.0.0.1:1234` |
 | `local.model` | 本地模型名（需已在 LM Studio 加载） | `qwen3.6-27b-abliterated-mlx` |
 | `local.token` | 本地服务鉴权 token（无鉴权留空） | `sk-lm-xxx` |
@@ -37,6 +38,8 @@
 
 **说明**：
 - 只要接口兼容 OpenAI `/v1/chat/completions` 即可，DeepSeek、通义、Moonshot、OpenRouter 等都可用（填各自 base_url / api_key / model）。
+- 不兼容 OpenAI 的服务用适配器：`claude`（Anthropic Messages）、`dashscope`（通义原生）；
+  适配器自动转换请求/响应格式，主流程无感知。
 - 云端不可用且本地离线时，控制台自动回退内置规则扩写（效果差一些，但能跑）。
 
 ## image_gen（文生图：角色锚点图 / 场景图 / 分镜图）
@@ -44,6 +47,7 @@
 | 字段 | 说明 | 示例 |
 |---|---|---|
 | `provider` | `local` 或 `cloud` | `local` |
+| `provider_type` | 云端接口格式：`openai` / `dashscope` | `openai` |
 | `local.url` | 本地生图服务（Boogu-Image）地址 | `http://127.0.0.1:8081` |
 | `cloud.enabled` | 是否启用云端文生图 | `false` |
 | `cloud.base_url` | 云端 OpenAI 兼容图片接口 | `https://api.openai.com/v1` |
@@ -54,6 +58,7 @@
 - 本地部署见 `README.md` 的"Boogu-Image 本地部署"（Apple Silicon / MLX，一键脚本 `scripts/deploy_boogu.sh`）
 - 云端接口按 OpenAI `/v1/images/generations` 兼容实现（支持 `b64_json` 或 `url` 返回）；
   `provider: cloud` 时走云端，主端点失败自动降级本地
+- 通义万相用 `provider_type: dashscope`（异步任务 + 自动轮询）
 
 ## vision（图片质检：检查穿帮 / 服装一致性 / 人数）
 

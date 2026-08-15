@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-08-15 · v0.11.0 — 云端 API 适配器机制（openai / claude / dashscope）
+
+### 本次更新内容
+
+- 新增**适配器注册表**：`_LLM_ADAPTERS`（openai / claude / dashscope）与 `_IMG_ADAPTERS`（openai / dashscope），config `provider_type` 选择，扩展新服务只需加一个适配器
+- **Claude 适配器**：转 Anthropic Messages API（`/v1/messages`，system 提取、`x-api-key` + `anthropic-version` 头）
+- **通义适配器**：千问走 DashScope 原生 text-generation（同步）；万相走 multimodal-generation（`X-DashScope-Async` 异步任务 + 自动轮询）
+- 新增 `_strip_v1`：DashScope 原生 API 需要不带 `/v1` 的根地址（自动去重）
+- 设置抽屉新增「云端接口格式」下拉（LLM 三选一、文生图二选一），保存进 config.json
+
+### 验证方式
+
+- 适配器单测（mock + 真实本地 echo 服务器）：claude 请求头/body 转换正确、dashscope URL 无双 `/v1`
+- `py_compile` / `node --check` / config JSON 校验通过
+
+### 影响与注意事项
+
+- 默认 `provider_type: openai`，现有配置不受影响
+- 主备降级逻辑不变：适配器按 provider_type 各自转换，主失败切备用
+
+---
+
 ## 2026-08-15 · v0.10.4 — 修复 AI 检测不可用（OpenAI 兼容 URL 缺失 /v1）
 
 ### 本次更新内容
