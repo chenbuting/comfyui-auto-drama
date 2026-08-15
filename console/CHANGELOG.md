@@ -5,6 +5,27 @@
 
 ---
 
+## 2026-08-15 · v0.10.1 — Boogu 部署脚本 + 云端生图切换 + 移除 TTS
+
+### 本次更新内容
+
+- 新增 `scripts/deploy_boogu.sh`：Boogu-Image 本地生图一键部署（装依赖 / 克隆 boogu-image-mlx 管线 / 下载模型 / 启动指引），Apple Silicon / MLX
+- 新增 `scripts/boogu_server.py`：参数化 OpenAI 兼容生图服务（`BOOGU_PKG/BOOGU_MODEL/BOOGU_QWEN/BOOGU_PORT` 环境变量，无绝对路径）
+- README / CONFIG.md 补充：Boogu 本地部署步骤 + 云端模型切换示例（LLM 与文生图 provider 切换、OpenAI 兼容要求、主端点失败自动降级）
+- 移除与项目无关的 Qwen3-TTS 配置（`config.tts`），声音方案已完全依赖 H3 官方 (S1)/(S2) 说话人 ID
+
+### 验证方式
+
+- `bash -n deploy_boogu.sh` / `py_compile boogu_server.py` 通过
+- `_image_gen_endpoints` provider 切换验证：cloud→(cloud, local)，local→(local, cloud)
+- 服务重启后 `/api/config` 无 tts 字段
+
+### 影响与注意事项
+
+- 非 Apple Silicon 平台建议直接使用云端生图（config `image_gen.provider: cloud`）
+
+---
+
 ## 2026-08-15 · v0.10.0 — 开源化重构（全配置化 + 目录归拢 + 云端模型）
 
 ### 本次更新内容

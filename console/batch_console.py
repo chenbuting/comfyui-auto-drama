@@ -58,7 +58,6 @@ _CONFIG_DEFAULTS = {
         "cloud": {"enabled": False, "base_url": "https://api.openai.com/v1", "api_key": "", "model": "gpt-image-1"},
     },
     "vision": {"base_url": "http://127.0.0.1:8001/v1", "api_key": "", "model": "qwen-vl-max"},
-    "tts": {"url": "http://127.0.0.1:5002"},
     "console": {"port": 8890},
 }
 
@@ -116,7 +115,6 @@ IMAGE_DIRS = [_abs_path(d) for d in _CONFIG["storage"]["asset_dirs"]]
 LMSTUDIO_URL = _CONFIG["llm"]["local"]["url"]
 LMSTUDIO_MODEL = _CONFIG["llm"]["local"]["model"]
 BOOGU_URL = _CONFIG["image_gen"]["local"]["url"]
-TTS_URL = _CONFIG["tts"]["url"]
 
 # 项目进度状态机（0-6）：仅创建 → 剧本 → 改写 → 提示词 → 资产 → 提交 → 出片
 PROGRESS_LABELS = [

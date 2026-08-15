@@ -50,7 +50,10 @@
 | `cloud.api_key` | 云端 Key | `sk-xxx` |
 | `cloud.model` | 图片模型名 | `gpt-image-1` |
 
-**说明**：云端接口按 OpenAI `/v1/images/generations` 兼容实现（支持 base64 返回）。
+**说明**：
+- 本地部署见 `README.md` 的"Boogu-Image 本地部署"（Apple Silicon / MLX，一键脚本 `scripts/deploy_boogu.sh`）
+- 云端接口按 OpenAI `/v1/images/generations` 兼容实现（支持 `b64_json` 或 `url` 返回）；
+  `provider: cloud` 时走云端，主端点失败自动降级本地
 
 ## vision（图片质检：检查穿帮 / 服装一致性 / 人数）
 
@@ -59,12 +62,6 @@
 | `base_url` | OpenAI 兼容视觉服务（本地或云端） | `http://127.0.0.1:8001/v1` |
 | `api_key` | 服务鉴权（无则留空） | `sk-xxx` |
 | `model` | 视觉模型名 | `qwen-vl-max` |
-
-## tts（声音克隆，可选）
-
-| 字段 | 说明 | 示例 |
-|---|---|---|
-| `url` | Qwen3-TTS 克隆服务地址 | `http://127.0.0.1:5002` |
 
 ## console（控制台自身）
 

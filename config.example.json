@@ -38,9 +38,6 @@
     "api_key": "",
     "model": "qwen-vl-max"
   },
-  "tts": {
-    "url": "http://127.0.0.1:5002"
-  },
   "console": {
     "port": 8890
   }

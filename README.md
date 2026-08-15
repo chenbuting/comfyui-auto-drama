@@ -71,9 +71,41 @@ python3 batch_console.py 8890
 ## 本地服务（可选）
 
 - **LM Studio**：`http://127.0.0.1:1234`，加载一个 OpenAI 兼容模型（如 `qwen3.6-27b-abliterated-mlx`）
-- **Boogu-Image**：`http://127.0.0.1:8081` 本地生图
+- **Boogu-Image**：`http://127.0.0.1:8081` 本地生图（Apple Silicon / MLX）
 - **视觉质检**：OpenAI 兼容视觉服务（如通义 qwen-vl），配置在 `config.json -> vision`
-- **Qwen3-TTS**：`http://127.0.0.1:5002`（声音克隆，可选）
+
+### Boogu-Image 本地部署（Apple Silicon）
+
+```bash
+bash scripts/deploy_boogu.sh          # 装依赖 + 克隆管线 + 下载模型 + 准备服务
+BOOGU_MODEL=~/.boogu/models/Boogu-Image-0.1-Turbo-8bit \
+BOOGU_QWEN=~/.boogu/models/Qwen3-VL-8B-Instruct-4bit \
+python3 scripts/boogu_server.py       # 启动（默认 8081）
+```
+
+- 依赖：`mlx` / `mlx-vlm` / `fastapi` / `uvicorn` / `pillow`，管线来自 [xocialize/boogu-image-mlx](https://github.com/xocialize/boogu-image-mlx)
+- 模型：`mlx-community/Boogu-Image-0.1-Turbo-8bit`（约 10GB）+ `Qwen3-VL-8B-Instruct-4bit`（prompt 理解辅助）
+- 非 Apple Silicon 无法本地跑 → 直接切**云端生图**（见下）
+
+### 云端模型切换（LLM / 文生图）
+
+语言模型与文生图都支持本地 ↔ 云端切换（`config.json` 或设置抽屉）：
+
+```json
+{
+  "llm": {
+    "provider": "cloud",
+    "cloud": { "base_url": "https://api.deepseek.com/v1", "api_key": "sk-...", "model": "deepseek-chat" }
+  },
+  "image_gen": {
+    "provider": "cloud",
+    "cloud": { "base_url": "https://api.openai.com/v1", "api_key": "sk-...", "model": "gpt-image-1" }
+  }
+}
+```
+
+- 云端接口需兼容 OpenAI：LLM 走 `/v1/chat/completions`，文生图走 `/v1/images/generations`（支持 `b64_json` 或 `url` 返回）
+- 主端点失败会自动降级到另一侧（本地↔云端互备）
 
 ## 目录结构
 
