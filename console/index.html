@@ -1464,7 +1464,9 @@ async function assemble() {
   let d;
   try { d = await ensureAssembleVersions(); }
   catch (e) { toast('版本信息加载失败：' + e.message, true); return; }
-  const segs = d.segments || [];
+  const allSegs = d.segments || [];
+  const [rStart, rEnd] = currentSegRange();
+  const segs = allSegs.slice(rStart - 1, rEnd || allSegs.length);
   const noVideo = segs.filter(s => !(s.versions || []).length);
   if (noVideo.length) {
     toast(`⚠️ 以下段没有视频，无法合成：${noVideo.map(s => s.name).join('、')}`, true);
@@ -1472,18 +1474,19 @@ async function assemble() {
     return;
   }
   // 2) 多版本段必须先选择版本
-  const multi = segs.some(s => (s.versions || []).length > 1);
-  if (multi && !document.querySelector('.asm-sel')) {
-    toast('⚠️ 有段落存在多个版本，请先点「选择版本」选定后再合成', true);
+  const multiSegs = segs.filter(s => (s.versions || []).length > 1);
+  const unselected = multiSegs.filter(s => !versionSel[s.name]);
+  if (unselected.length) {
+    toast(`⚠️ 请先选择版本：${unselected.map(s => s.name).join('、')}`, true);
     loadAssembleVersions();
     return;
   }
   btn.disabled = true;
   $('assembleStatus').textContent = '🤖 合成中（约 1-3 分钟），请稍候…';
   $('assembleResult').innerHTML = '';
-  const selection = {};
+  const selection = {...versionSel};
   document.querySelectorAll('.asm-sel').forEach(sel => {
-    selection[sel.dataset.seg] = sel.value;
+    if (!selection[sel.dataset.seg]) selection[sel.dataset.seg] = sel.value;
   });
   const startV = parseInt($('asmStart').value, 10) || 1;
   const endRaw = $('asmEnd').value.trim();
@@ -1550,26 +1553,61 @@ async function exportCsv() {
   a.href = URL.createObjectURL(blob); a.download = 'tasks.csv'; a.click();
 }
 
+let versionSel = {};       // {段名: 已选视频文件名}
+let versionSegs = [];      // 当前范围内的全部段
+let versionPage = 0;
+const versionPageSize = 15;
+
+function currentSegRange() {
+  const start = parseInt($('asmStart').value, 10) || 1;
+  const endRaw = $('asmEnd').value.trim();
+  return [start, endRaw ? Math.max(start, parseInt(endRaw, 10) || start) : null];
+}
+
 async function loadAssembleVersions() {
   const box = $('versionPicker');
   try {
     const d = await ensureAssembleVersions();
-    const segs = d.segments || [];
-    if (!segs.length) { box.innerHTML = '<div class="hint">还没有已下载的视频段，先提交生成</div>'; return; }
-    const multi = segs.some(s => (s.versions || []).length > 1);
-    box.innerHTML = multi
-      ? `<div class="hint" style="margin-bottom:6px">🎞️ 每段选择要合成的版本（默认最新）：</div>`
-        + segs.map(s => `
-          <div class="row" style="margin:4px 0">
-            <span style="width:140px;font-size:12px;flex:none">${esc(s.name)}</span>
-            ${(s.versions || []).length
-              ? `<select class="asm-sel" data-seg="${escAttr(s.name)}" style="flex:1;font-size:12px">
-                   ${(s.versions || []).map(v => `<option value="${escAttr(v.filename)}">${esc(v.filename)} · ${esc(v.submitted_at || '')}${v.steps ? ` · ${v.steps}步` : ''}</option>`).join('')}
-                 </select>`
-              : `<span class="hint" style="color:var(--red)">无视频</span>`}
-          </div>`).join('')
-      : '<div class="hint">✅ 每段都只有一个版本，无需选择，直接「一键合成」即可。</div>';
+    const all = d.segments || [];
+    const [start, end] = currentSegRange();
+    versionSegs = all.slice(start - 1, end || all.length);
+    versionPage = 0;
+    renderVersionPicker();
   } catch (e) { box.innerHTML = '<div class="hint">版本加载失败</div>'; }
+}
+
+function renderVersionPicker() {
+  const box = $('versionPicker');
+  const total = versionSegs.length;
+  if (!total) { box.innerHTML = '<div class="hint">该范围内还没有已下载的视频段，先提交生成</div>'; return; }
+  const multi = versionSegs.some(s => (s.versions || []).length > 1);
+  const pages = Math.ceil(total / versionPageSize);
+  const pageSegs = versionSegs.slice(versionPage * versionPageSize, (versionPage + 1) * versionPageSize);
+  box.innerHTML = (multi
+    ? '<div class="hint" style="margin-bottom:6px">🎞️ 每段选择要合成的版本（默认最新）：</div>'
+    : '<div class="hint">✅ 该范围内每段都只有一个版本，无需选择，直接「一键合成」即可。</div>')
+    + pageSegs.map(s => {
+      const vs = s.versions || [];
+      if (vs.length) {
+        if (!versionSel[s.name]) versionSel[s.name] = vs[vs.length - 1].filename;
+        return `<div class="row" style="margin:4px 0">
+          <span style="width:140px;font-size:12px;flex:none">${esc(s.name)}</span>
+          <select class="asm-sel" data-seg="${escAttr(s.name)}" style="flex:1;font-size:12px"
+            onchange="versionSel[this.dataset.seg]=this.value">
+            ${vs.map(v => `<option value="${escAttr(v.filename)}" ${versionSel[s.name] === v.filename ? 'selected' : ''}>${esc(v.filename)} · ${esc(v.submitted_at || '')}${v.steps ? ` · ${v.steps}步` : ''}</option>`).join('')}
+          </select>
+        </div>`;
+      }
+      return `<div class="row" style="margin:4px 0">
+        <span style="width:140px;font-size:12px;flex:none">${esc(s.name)}</span>
+        <span class="hint" style="color:var(--red)">无视频</span>
+      </div>`;
+    }).join('')
+    + (pages > 1 ? `<div class="row" style="margin-top:10px;justify-content:center;gap:12px;align-items:center">
+        <button class="btn" ${versionPage === 0 ? 'disabled' : ''} onclick="versionPage>0&&(versionPage--,renderVersionPicker())">← 上一页</button>
+        <span class="hint">第 ${versionPage * versionPageSize + 1}-${Math.min((versionPage + 1) * versionPageSize, total)} / ${total} 段</span>
+        <button class="btn" ${versionPage >= pages - 1 ? 'disabled' : ''} onclick="versionPage<${pages - 1}&&(versionPage++,renderVersionPicker())">下一页 →</button>
+      </div>` : '');
 }
 
 async function loadAssembleHistory() {
@@ -2507,6 +2545,8 @@ $('btnRefreshStatus').addEventListener('click', refreshStatus);
 $('btnApplyMp').addEventListener('click', applyMpAll);
 $('btnAssemble').addEventListener('click', assemble);
 $('btnPickVersions').addEventListener('click', loadAssembleVersions);
+$('asmStart').addEventListener('change', loadAssembleVersions);
+$('asmEnd').addEventListener('change', loadAssembleVersions);
 $('btnExport').addEventListener('click', exportCsv);
 $('btnRefreshRecords').addEventListener('click', refreshRecords);
 $('btnClearHistory').addEventListener('click', clearHistory);

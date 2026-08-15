@@ -389,11 +389,13 @@ def assemble_project_video(project_name="", selection=None, seg_range=None, prog
     pt = proj.get("prompt_tasks") or []
     all_tasks = st.get("tasks", [])
     src_meta = []
+    seg_label = ""
     if pt:
         missing = []
         selection = selection or {}
         total = len(pt)
         start, end = seg_range or (0, total)
+        seg_label = f"_{start + 1}-{end}"
         if not (0 <= start < end <= total):
             raise RuntimeError(f"段范围无效：{start + 1}-{end}（共 {total} 段）")
         for seg in pt[start:end]:
@@ -484,7 +486,7 @@ def assemble_project_video(project_name="", selection=None, seg_range=None, prog
                 # Windows 下 ffmpeg concat 需要正斜杠（反斜杠会被当转义）
                 f.write(f"file '{p.replace(os.sep, '/')}'\n")
         base = _slug(project_name or "项目") or "project"
-        outname = f"合成_{base}_{int(time.time())}.mp4"
+        outname = f"合成_{base}{seg_label}_{int(time.time())}.mp4"
         dest = os.path.join(IMAGE_DIRS[1], outname)
         r = subprocess.run(
             ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", dest],
