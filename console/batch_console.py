@@ -423,7 +423,8 @@ def assemble_project_video(project_name=""):
         listfile = os.path.join(tmpdir, "list.txt")
         with open(listfile, "w", encoding="utf-8") as f:
             for p in norm_segs:
-                f.write(f"file '{p}'\n")
+                # Windows 下 ffmpeg concat 需要正斜杠（反斜杠会被当转义）
+                f.write(f"file '{p.replace(os.sep, '/')}'\n")
         base = _slug(project_name or "项目") or "project"
         outname = f"合成_{base}_{int(time.time())}.mp4"
         dest = os.path.join(IMAGE_DIRS[1], outname)

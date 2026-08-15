@@ -107,7 +107,7 @@ def main():
     listfile = os.path.join(TMP, "concat.txt")
     with open(listfile, "w") as f:
         for p in norm:
-            f.write(f"file '{p}'\n")
+            f.write(f"file '{p.replace(os.sep, '/')}'\n")
     joined = os.path.join(TMP, "joined.mp4")
     ffmpeg(["-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", joined])
     print("  拼接完成")

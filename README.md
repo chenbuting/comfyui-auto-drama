@@ -107,6 +107,48 @@ python3 scripts/boogu_server.py       # 启动（默认 8081）
 - 云端接口需兼容 OpenAI：LLM 走 `/v1/chat/completions`，文生图走 `/v1/images/generations`（支持 `b64_json` 或 `url` 返回）
 - 主端点失败会自动降级到另一侧（本地↔云端互备）
 
+## Windows 部署
+
+本项目完全兼容 Windows。与 macOS 的差异仅在于**本地生图**（Boogu-Image MLX 仅支持 Apple Silicon）和**后台常驻方式**：
+
+### 1. 安装依赖
+
+```bat
+python -m pip install -r requirements.txt     :: 控制台本体零依赖，仅为演示脚本装 Pillow
+```
+
+另外安装 **ffmpeg**（加入 PATH）：视频转码/抽帧/合成都需要。推荐 winget：
+
+```bat
+winget install ffmpeg
+```
+
+### 2. 模型配置
+
+- **语言模型**：Windows 可装 LM Studio（[lmstudio.ai](https://lmstudio.ai)，跨平台）加载本地模型；也可直接用云端（`config.json -> llm.provider: cloud`）
+- **文生图**：本地 Boogu MLX **无法在 Windows 运行**，请用云端生图：
+
+```json
+"image_gen": {
+  "provider": "cloud",
+  "cloud": { "base_url": "https://api.openai.com/v1", "api_key": "sk-...", "model": "gpt-image-1" }
+}
+```
+
+- **ComfyUI**：Windows 上可直接跑远程或本机 ComfyUI（H3 节点），参考 `run_nvidia_gpu.bat`
+
+### 3. 启动控制台
+
+```bat
+scripts\start_windows.bat          :: 前台运行（简单）
+cd console && python start_daemons.py   :: 后台常驻（已做 Windows 兼容）
+```
+
+浏览器打开 <http://127.0.0.1:8890>。
+
+> 说明：`start_daemons.py` 已跨平台（macOS/Linux 用 setsid，Windows 用 CREATE_NEW_PROCESS_GROUP）；
+> 代码中所有路径均使用 `os.path` 拼接，Windows 中文路径/文件名正常。
+
 ## 目录结构
 
 ```text

@@ -13,7 +13,9 @@ SKIP_MODELS=0
 
 echo "==> 1/4 检查环境（需要 macOS + Apple Silicon）"
 if [[ "$(uname -s)" != "Darwin" ]]; then
-  echo "错误：Boogu-Image MLX 仅支持 macOS（Apple Silicon）。其他平台请使用云端生图（config.json image_gen.cloud）。" >&2
+  echo "错误：Boogu-Image MLX 仅支持 macOS（Apple Silicon）。" >&2
+  echo "Windows/Linux 用户请使用云端生图：config.json 的 image_gen.provider 设为 cloud，" >&2
+  echo "并填写 OpenAI 兼容接口（base_url / api_key / model），详见 CONFIG.md。" >&2
   exit 1
 fi
 if [[ "$(uname -m)" != "arm64" ]]; then

@@ -5,6 +5,28 @@
 
 ---
 
+## 2026-08-15 · v0.10.3 — Windows 跨平台兼容
+
+### 本次更新内容
+
+- `start_daemons.py` 跨平台：macOS/Linux 用 setsid，**Windows 用 `CREATE_NEW_PROCESS_GROUP + DETACHED_PROCESS`** 后台常驻
+- 新增 `scripts/start_windows.bat`：Windows 前台启动控制台
+- ffmpeg concat 列表路径跨平台：Windows 下反斜杠转正斜杠（`os.sep` 兼容），合成/转码在 Windows 正常
+- README 新增「Windows 部署」章节：依赖安装（winget ffmpeg）、LM Studio/云端 LLM、**生图用云端**（Boogu MLX 仅 Apple Silicon）、启动方式
+- `deploy_boogu.sh` 非 macOS 平台明确提示改云端生图
+
+### 验证方式
+
+- `py_compile` 全部脚本通过；`start_daemons.py` Windows 分支语法合法
+- macOS 下服务重启正常，页面 200
+
+### 影响与注意事项
+
+- Windows 本地无法跑 Boogu MLX，生图必须 `image_gen.provider: cloud`
+- ComfyUI / LM Studio / 云端 API 均跨平台
+
+---
+
 ## 2026-08-15 · v0.10.2 — 修复配置化导致的服务器地址丢失
 
 ### 本次更新内容
