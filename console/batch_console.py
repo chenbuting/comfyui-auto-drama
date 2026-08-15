@@ -3088,7 +3088,17 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(check_lmstudio(), ensure_ascii=False))
             return
         if path.path == "/api/config":
-            self._send(200, json.dumps(_CONFIG, ensure_ascii=False))
+            # 用户运行时保存的服务器优先于配置文件（防止配置化把已连通的地址改丢）
+            cfg = _CONFIG
+            try:
+                st0 = load_state()
+                if st0.get("server"):
+                    cfg = dict(cfg)
+                    cfg["comfyui"] = dict(cfg.get("comfyui") or {})
+                    cfg["comfyui"]["server"] = st0["server"]
+            except Exception:
+                pass
+            self._send(200, json.dumps(cfg, ensure_ascii=False))
             return
         if path.path == "/api/boogu_check":
             self._send(200, json.dumps(boogu_check(), ensure_ascii=False))
