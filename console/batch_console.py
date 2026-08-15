@@ -3737,6 +3737,8 @@ class Handler(BaseHTTPRequestHandler):
                           "asset_state", "generation_log"):
                     if k in body:
                         proj[k] = body[k]
+                if body.get("prompt_tasks") is not None:
+                    proj["prompt_updated_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
                 proj["name"] = new_name
                 st["project"] = proj
                 snap2 = dict(proj)
@@ -3798,9 +3800,27 @@ class Handler(BaseHTTPRequestHandler):
                 ]
                 if p.get("submitted_at") or p.get("submitted_task_names") or matched:
                     progress = 5
-                if progress >= 5 and matched and all(
-                    t.get("downloaded") or t.get("output_file") for t in matched
-                ):
+                # 段级出片：每段 prompt_tasks 对应的"同名最新任务"必须
+                # 晚于提示词最后更新时间且已下载，才算出片
+                p_updated = p.get("prompt_updated_at") or p.get("updated_at") or ""
+                pt_segs = p.get("prompt_tasks") or []
+                seg_done = 0
+                for seg in pt_segs:
+                    sname = str(seg.get("name") or "")
+                    if not sname:
+                        continue
+                    sc = [t for t in tasks
+                          if t.get("name") == sname
+                          or str(t.get("name") or "").startswith(sname + "_")]
+                    sc.sort(key=lambda x: str(x.get("submitted_at") or ""))
+                    if not sc:
+                        continue
+                    latest = sc[-1]
+                    if (latest.get("downloaded") or latest.get("output_file")) \
+                            and p_updated and str(latest.get("submitted_at") or "") >= p_updated:
+                        seg_done += 1
+                seg_total = len(pt_segs)
+                if progress >= 5 and seg_total and seg_done == seg_total:
                     progress = 6
                 rows.append({
                     "name": name,
@@ -3818,6 +3838,8 @@ class Handler(BaseHTTPRequestHandler):
                         ) if isinstance(meta.get(k), dict) else 0
                         for k in ("role", "scene", "story")
                     },
+                    "seg_done": seg_done,
+                    "seg_total": seg_total,
                     "has_script": bool(p.get("current_script") or p.get("script_before")),
                     "has_prompt": bool(p.get("prompt_tasks")),
                     "current": name == cur_name,

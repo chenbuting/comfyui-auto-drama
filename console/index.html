@@ -730,7 +730,7 @@ async function renderProjects() {
           <div class="proj-meta">${esc(p.type || '')} · ${esc(p.aspect || '')} · ${esc(p.budget || '')} · ${esc(p.updated_at || '')}</div>
           <div class="proj-progress">
             <span class="proj-bar"><span style="width:${Math.max(3, (p.progress || 0) / 7 * 100)}%"></span></span>
-            <span class="proj-prog-label">进度 ${(p.progress || 0)}/7 · ${PROGRESS_LABELS[p.progress || 0]}</span>
+            <span class="proj-prog-label">进度 ${(p.progress || 0)}/7 · ${PROGRESS_LABELS[p.progress || 0]}${p.seg_total ? ` · 已出片 ${p.seg_done || 0}/${p.seg_total} 段` : ''}</span>
           </div>
         </div>
         <div class="proj-actions">
