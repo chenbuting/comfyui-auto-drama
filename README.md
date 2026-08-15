@@ -1,0 +1,97 @@
+# ComfyUI 自动化短剧生成系统
+
+基于 **ComfyUI + MiniMax H3** 的自动化短剧/漫剧生产流水线：剧本生成 → 改写 → 规范提示词 → 参考资产（角色锚点图/场景图/分镜图）→ 批量视频生成 → 自动质检 → 一键合成成片。
+
+控制台本体**零第三方依赖**（Python 标准库），生成走远程 ComfyUI（H3 ref2va），文本走本地 LM Studio / 云端 API（可切换），图片走本地 Boogu / 云端 API（可切换）。
+
+> 本项目为演示/教学用途。模型输出质量受提示词与工作流配置影响，请勿用于任何违法违规内容。
+
+## 功能一览
+
+- 📜 **剧本流水线**：粘贴剧本片段 / 导入剧本 JSON → AI 生成或改写分镜剧本
+- ✍️ **规范提示词**：按 MiniMax H3 官方规范生成三段式提示词（对白 `(S1)/(S2)` 说话人 ID、音色锁定、防穿帮负向约束）
+- 🖼️ **参考资产**：一键生成角色锚点图 / 场景图 / 分镜图，自动质检（人数、服装、穿帮），支持对话修改提示词后重新生成
+- 🚀 **批量生成**：T2V / I2V / R2V（多参考）模式，链式衔接（上段末帧接下段首帧），步数 4-50 可调（≤8 自动加速）
+- 🎬 **合成成片**：自动拼接 + 自动裁剪 H3 开头"起始音节"（消除每段开头的杂音）
+- 🩺 **失败码体系**：生成失败自动打码定位（F-SUBMIT-API / F-TIMEOUT / F-COUNT …）
+
+## 快速开始
+
+### 1. 环境要求
+
+- Python 3.10+（控制台零第三方依赖；工作流演示脚本需要 `pip install -r requirements.txt` 的 Pillow）
+- ffmpeg（视频处理）
+- 远程或本机 ComfyUI（需安装 MiniMax H3 工作流，见下方"远程依赖"）
+- 文本模型：本地 LM Studio / Ollama（OpenAI 兼容）或任意云端 API
+- 生图服务：本地 Boogu-Image（默认 `http://127.0.0.1:8081`）或云端 API
+
+### 2. 配置
+
+```bash
+cp config.example.json config.json
+```
+
+按 [CONFIG.md](CONFIG.md) 填写（服务器地址、模型、云端 API Key）。**所有路径写相对路径，禁止绝对路径。**
+
+### 3. 启动控制台
+
+```bash
+cd console
+python3 start_daemons.py        # 后台常驻（web + 链式守护）
+# 或前台运行
+python3 batch_console.py 8890
+```
+
+浏览器打开 <http://127.0.0.1:8890>。
+
+## 使用流程（8 步）
+
+1. **创建项目**（名称唯一，项目库显示在下方，支持继续）
+2. **脚本生成**：填剧情梗概 AI 生成，或粘贴剧本片段 / 导入剧本 JSON
+3. **改写脚本**：AI 从编剧角度理顺人物动作、情节流畅性（改写前/后对照）
+4. **生成规范提示词**：逐段扩写成 H3 三段式（可手动编辑，可继续改写）
+5. **参考资产**：资产状态表（身份/发型/服装/批准）→ 生成锚点图/场景图/分镜图 → 自动质检
+6. **预览确认**：检查名称/时长/参考图/提示词完整性
+7. **提交生成**：模式 / 分辨率 / 步数 / 链式衔接 / 成片质量可选，实时状态监控
+8. **记录导出**：生成记录（版本批次）、失败码速查、CSV 导出、一键合成
+
+演示数据见 [examples/demo_script.json](examples/demo_script.json)（可直接在第 2 步"导入剧本 JSON"）。
+
+## 远程依赖（ComfyUI 需安装）
+
+| 组件 | 说明 |
+|---|---|
+| MiniMax H3 节点 | `Comfy-Org/MiniMax-H3`（ref2va 工作流） |
+| H3 模型 | `minimax_h3_ref2va_pruned_int8_convrot.safetensors` 等 |
+| 加速节点 | `MiniMaxH3TurboLoRA` + `MiniMaxH3MemoryEfficientSageAttentionPatch`（步数 ≤8 自动启用） |
+| CLIP | 无审查 CLIP（`R2V_UNCENSORED_CLIP`，配置在 `workflows/build_api_graphs.py`） |
+
+工作流模板与构建脚本在 `workflows/`。
+
+## 本地服务（可选）
+
+- **LM Studio**：`http://127.0.0.1:1234`，加载一个 OpenAI 兼容模型（如 `qwen3.6-27b-abliterated-mlx`）
+- **Boogu-Image**：`http://127.0.0.1:8081` 本地生图
+- **视觉质检**：OpenAI 兼容视觉服务（如通义 qwen-vl），配置在 `config.json -> vision`
+- **Qwen3-TTS**：`http://127.0.0.1:5002`（声音克隆，可选）
+
+## 目录结构
+
+```text
+├── console/          # 控制台（batch_console.py / index.html / rules / chain_daemon）
+├── workflows/        # 工作流构建脚本与 H3 API 模板
+├── scripts/          # 辅助脚本（ComfyUI 备份等）
+├── examples/         # 演示剧本
+├── config.example.json / CONFIG.md
+├── requirements.txt / LICENSE
+```
+
+## 常见问题
+
+- **生成视频开头有杂音**：H3 每段开头自带约 0.12-0.16s "起始音节"，一键合成时已自动裁剪；单段预览保留原始开头
+- **角色音色不分**：对白必须带 `(S1)/(S2)` 说话人 ID（规则已强制），并配合音色锁定描述
+- **衣服不对**：检查资产状态表的服装描述与锚点图是否一致，参考图是 H3 的主要依据
+
+## 致谢
+
+提示词工程方法论参考 Higgsfield 开源长片《Hell Grind》的结构化生产经验（角色资产化 / 七层提示词 / 镜头契约 / 失败诊断）。

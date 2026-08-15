@@ -1,0 +1,39 @@
+# ---- 配置与密钥 ----
+config.json
+config.*.local.json
+.env
+*.env
+
+# ---- 运行时数据（不要提交） ----
+console/console.db
+console/console.db-*
+console/batch_state.json
+console/batch_state.json.bak
+console/*.log
+console/*.err.log
+console/batch_records.csv
+console/batch_records.md
+console/__pycache__/
+*.pyc
+.playwright-cli/
+
+# ---- 个人内容与素材（演示项目不包含） ----
+_private/
+素材/
+出镜素材/
+录屏素材/
+对比素材/
+comfyui_backup/
+*.mp4
+*.mov
+*.wav
+*.aiff
+
+# ---- 工作流中间产物 ----
+workflows/tmp/
+workflows/tasks/
+workflows/__pycache__/
+
+# ---- 系统 ----
+.DS_Store
+Thumbs.db

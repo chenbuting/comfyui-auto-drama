@@ -1,0 +1,47 @@
+{
+  "comfyui": {
+    "server": "http://127.0.0.1:8188",
+    "workflow_dir": "workflows"
+  },
+  "storage": {
+    "output_dir": "comfyui_backup/outputs",
+    "asset_dirs": ["素材", "出镜素材"]
+  },
+  "llm": {
+    "provider": "local",
+    "local": {
+      "url": "http://127.0.0.1:1234",
+      "model": "qwen3.6-27b-abliterated-mlx",
+      "token": ""
+    },
+    "cloud": {
+      "enabled": false,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "",
+      "model": "gpt-4o-mini"
+    }
+  },
+  "image_gen": {
+    "provider": "local",
+    "local": {
+      "url": "http://127.0.0.1:8081"
+    },
+    "cloud": {
+      "enabled": false,
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "",
+      "model": "gpt-image-1"
+    }
+  },
+  "vision": {
+    "base_url": "http://127.0.0.1:8001/v1",
+    "api_key": "",
+    "model": "qwen-vl-max"
+  },
+  "tts": {
+    "url": "http://127.0.0.1:5002"
+  },
+  "console": {
+    "port": 8890
+  }
+}

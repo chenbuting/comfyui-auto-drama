@@ -1,0 +1,2230 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ComfyUI 短剧工坊</title>
+<style>
+  :root {
+    --bg1: #f4f7fc; --bg2: #eaf0f9; --card: #ffffff; --line: #e3e9f2;
+    --text: #1f2937; --muted: #7b8794; --primary: #ff6b35; --primary2: #ff9a5c;
+    --blue: #4f7cff; --green: #22c55e; --red: #ef4444; --yellow: #f59e0b;
+    --shadow: 0 10px 30px rgba(31,41,55,.08); --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: linear-gradient(160deg, var(--bg1) 0%, var(--bg2) 100%);
+    color: var(--text); font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    min-height: 100vh; padding-bottom: 60px;
+  }
+  /* ---------- 顶部 ---------- */
+  header {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 28px; background: rgba(255,255,255,.82);
+    backdrop-filter: blur(12px); border-bottom: 1px solid var(--line);
+  }
+  .brand {
+    font-size: 18px; font-weight: 700;
+    background: linear-gradient(120deg, var(--primary), #ff4d6d);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .brand small { display: block; font-size: 11px; color: var(--muted); font-weight: 400;
+    -webkit-text-fill-color: var(--muted); }
+  .project-chip {
+    margin-left: 8px; padding: 6px 14px; border-radius: 999px; font-size: 13px;
+    background: linear-gradient(120deg, rgba(79,124,255,.12), rgba(79,124,255,.05));
+    color: var(--blue); border: 1px solid rgba(79,124,255,.25); font-weight: 600;
+  }
+  header .spacer { flex: 1; }
+  .icon-btn {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 9px 16px; font-size: 13px; cursor: pointer; color: var(--text);
+    box-shadow: 0 2px 8px rgba(31,41,55,.06); transition: all .15s;
+  }
+  .icon-btn:hover { border-color: var(--primary); color: var(--primary); }
+  /* ---------- 步骤条 ---------- */
+  .steps {
+    display: flex; gap: 0; overflow-x: auto; padding: 18px 28px 0;
+    max-width: 1400px; margin: 0 auto;
+  }
+  .step {
+    flex: 1 0 auto; min-width: 118px; text-align: center; position: relative;
+    padding: 10px 8px 14px; cursor: pointer; user-select: none;
+  }
+  .step .num {
+    width: 30px; height: 30px; line-height: 30px; margin: 0 auto 6px;
+    border-radius: 50%; background: #fff; border: 2px solid var(--line);
+    color: var(--muted); font-size: 13px; font-weight: 700; position: relative; z-index: 1;
+  }
+  .step .label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .step.active .num { background: linear-gradient(120deg, var(--primary), var(--primary2));
+    border-color: transparent; color: #fff; box-shadow: 0 4px 12px rgba(255,107,53,.35); }
+  .step.active .label { color: var(--primary); font-weight: 700; }
+  .step.done .num { background: var(--green); border-color: transparent; color: #fff; }
+  .step.done .num::after { content: "✓"; }
+  .step.done .num span { display: none; }
+  .step::before {
+    content: ""; position: absolute; top: 24px; left: -50%; width: 100%; height: 2px;
+    background: var(--line); z-index: 0;
+  }
+  .step:first-child::before { display: none; }
+  .step.done::before { background: var(--green); }
+  /* ---------- 面板 ---------- */
+  main { max-width: 1400px; margin: 22px auto 0; padding: 0 28px; }
+  .panel { display: none; }
+  .panel.active { display: block; animation: fadeIn .25s ease; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 24px; margin-bottom: 18px;
+  }
+  .card h2 { font-size: 17px; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .card h2 .step-tag {
+    font-size: 11px; padding: 3px 10px; border-radius: 999px; font-weight: 600;
+    background: linear-gradient(120deg, rgba(255,107,53,.12), rgba(255,77,109,.08));
+    color: var(--primary);
+  }
+  .card .desc { font-size: 12px; color: var(--muted); margin-bottom: 16px; line-height: 1.7; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-bottom: 16px; }
+  label.field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); }
+  input[type=text], input[type=number], input[type=password], select, textarea {
+    background: #f8fafc; border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; padding: 10px 12px; font-size: 13px; font-family: inherit;
+    transition: border .15s, box-shadow .15s;
+  }
+  input:focus, select:focus, textarea:focus {
+    outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(255,107,53,.12);
+  }
+  textarea { resize: vertical; line-height: 1.6; }
+  .btn {
+    background: #fff; border: 1px solid var(--line); color: var(--text);
+    border-radius: 10px; padding: 10px 18px; font-size: 13px; cursor: pointer;
+    transition: all .15s; box-shadow: 0 2px 8px rgba(31,41,55,.05);
+  }
+  .btn:hover { border-color: var(--primary); color: var(--primary); transform: translateY(-1px); }
+  .btn.primary {
+    background: linear-gradient(120deg, var(--primary), var(--primary2));
+    border: none; color: #fff; font-weight: 700; box-shadow: 0 6px 18px rgba(255,107,53,.3);
+  }
+  .btn.primary:hover { color: #fff; box-shadow: 0 8px 24px rgba(255,107,53,.4); }
+  .btn.blue { background: linear-gradient(120deg, var(--blue), #7ba1ff); border: none; color: #fff; font-weight: 600; }
+  .btn.blue:hover { color: #fff; }
+  .btn.green { background: linear-gradient(120deg, var(--green), #4ade80); border: none; color: #fff; font-weight: 600; }
+  .btn.green:hover { color: #fff; }
+  .btn.ghost { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+  .btn[disabled] { opacity: .55; cursor: not-allowed; transform: none; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.7; }
+  code { background: #eef2f8; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+  /* ---------- 表格 ---------- */
+  .tablewrap { overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
+  table { border-collapse: collapse; width: 100%; min-width: 900px; font-size: 13px; }
+  th { background: #f8fafc; color: var(--muted); text-align: left; padding: 10px 12px;
+    border-bottom: 1px solid var(--line); font-weight: 600; white-space: nowrap; }
+  td { padding: 8px 12px; border-bottom: 1px solid #f0f3f8; vertical-align: top; }
+  tr:hover td { background: rgba(79,124,255,.03); }
+  /* ---------- 对比 ---------- */
+  .compare { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .compare-col { border: 1px solid var(--line); border-radius: 12px; padding: 14px; background: #fafbfe; }
+  .compare-col h3 { font-size: 13px; margin-bottom: 10px; color: var(--muted); }
+  .compare-col.before h3 { color: var(--muted); }
+  .compare-col.after { border-color: rgba(34,197,94,.4); background: rgba(34,197,94,.03); }
+  .compare-col.after h3 { color: var(--green); }
+  .sb-item { padding: 8px 10px; border-bottom: 1px dashed var(--line); font-size: 12px; line-height: 1.6; }
+  .sb-item:last-child { border-bottom: none; }
+  .sb-item b { color: var(--text); }
+  .sb-item .tag { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #eef2f8; color: var(--muted); margin-right: 4px; }
+  /* ---------- 提示词卡片 ---------- */
+  .pcard {
+    border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin-bottom: 12px;
+    background: #fafbfe;
+  }
+  .pcard .head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+  .pcard .head .name { font-weight: 700; font-size: 13px; }
+  .pcard textarea { width: 100%; min-height: 120px; font-family: ui-monospace, monospace; font-size: 12px; }
+  .pill { font-size: 11px; padding: 2px 10px; border-radius: 999px; font-weight: 600; }
+  .pill.queued { background: #eef2f8; color: var(--muted); }
+  .pill.waiting { background: rgba(245,158,11,.12); color: var(--yellow); }
+  .pill.running { background: rgba(79,124,255,.12); color: var(--blue); }
+  .pill.completed { background: rgba(34,197,94,.12); color: var(--green); }
+  .pill.error { background: rgba(239,68,68,.12); color: var(--red); }
+  .spin { width: 14px; height: 14px; border: 2px solid rgba(79,124,255,.25); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .card-item.generating { border-color: var(--blue); box-shadow: 0 0 0 1px rgba(79,124,255,.25); }
+  /* ---------- 状态卡片 ---------- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .card-item {
+    background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px;
+    box-shadow: 0 4px 14px rgba(31,41,55,.05);
+  }
+  .card-item .r1 { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .card-item .name { font-weight: 700; font-size: 13px; }
+  .card-item .meta { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .card-item .outs { font-size: 12px; color: var(--muted); word-break: break-all; }
+  /* ---------- 抽屉 ---------- */
+  .drawer-bg { position: fixed; inset: 0; background: rgba(15,23,42,.35); z-index: 90; display: none; }
+  .drawer {
+    position: fixed; top: 0; right: 0; height: 100vh; width: min(420px, 92vw);
+    background: #fff; z-index: 91; box-shadow: -12px 0 40px rgba(15,23,42,.15);
+    transform: translateX(105%); transition: transform .25s ease; display: flex; flex-direction: column;
+  }
+  .drawer.open { transform: none; }
+  .drawer .d-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 22px; border-bottom: 1px solid var(--line); font-weight: 700;
+  }
+  .drawer .d-body { padding: 20px 22px; overflow: auto; flex: 1; }
+  .drawer .d-body label.field { margin-bottom: 16px; }
+  .toast {
+    position: fixed; top: 18px; left: 50%; transform: translateX(-50%);
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+    padding: 12px 20px; font-size: 13px; z-index: 99; box-shadow: 0 10px 30px rgba(15,23,42,.2);
+    display: none; max-width: 82vw;
+  }
+  .toast.err { border-color: var(--red); color: var(--red); }
+  .toast.ok { border-color: var(--green); color: var(--green); }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 5px; }
+  .dot.ok { background: var(--green); }
+  .dot.bad { background: var(--red); }
+  #llmStatusLine { font-size: 12px; color: var(--muted); }
+  .modal-bg { position: fixed; inset: 0; background: rgba(15,23,42,.35); display: none;
+    align-items: center; justify-content: center; z-index: 98; }
+  .modal { background: #fff; border-radius: 16px; padding: 20px; width: min(680px, 92vw);
+    max-height: 84vh; overflow: auto; box-shadow: 0 20px 60px rgba(15,23,42,.25); }
+  .modal h3 { margin-bottom: 12px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tabs button { background: #f1f4f9; border: 1px solid var(--line); border-radius: 8px;
+    padding: 7px 13px; font-size: 12px; cursor: pointer; color: var(--muted); }
+  .tabs button.active { background: linear-gradient(120deg, var(--primary), var(--primary2));
+    border-color: transparent; color: #fff; font-weight: 600; }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .warn-box { display: none; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.35);
+    color: #b45309; border-radius: 10px; padding: 10px 14px; margin-top: 12px; font-size: 12px;
+    line-height: 1.7; white-space: pre-wrap; }
+  .empty { text-align: center; color: var(--muted); padding: 36px 0; font-size: 13px; }
+  .empty .big { font-size: 40px; margin-bottom: 10px; }
+  .proj-item { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 14px 16px; border: 1px solid var(--border); border-radius: 12px; margin-top: 10px;
+    background: var(--panel2); }
+  .proj-item.cur { border-color: rgba(99,140,255,.55); background: rgba(99,140,255,.07); }
+  .proj-name { font-size: 15px; font-weight: 700; color: var(--text); }
+  .proj-cur { display: inline-block; margin-left: 8px; padding: 2px 9px; border-radius: 999px;
+    font-size: 11px; font-weight: 600; color: #93c5fd; background: rgba(99,140,255,.14); }
+  .proj-meta { margin-top: 5px; font-size: 12px; color: var(--muted); }
+  .proj-progress { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+  .asset-state { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+  .ast-head, .ast-row { display: grid; grid-template-columns: 110px 1fr 1fr 1.6fr 150px 64px; gap: 6px; align-items: center; }
+  .ast-head { font-size: 11px; color: var(--muted); font-weight: 600; }
+  .ast-row .ast-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ast-in { padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font-size: 12px; width: 100%; background: #fff; }
+  .ast-ref { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ast-ok { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); }
+  .cfg-block { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin: 12px 0; background: #fff; }
+  .cfg-title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  .proj-bar { flex: 0 0 150px; height: 7px; border-radius: 999px; background: var(--border);
+    overflow: hidden; }
+  .proj-bar span { display: block; height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, var(--primary), var(--primary2)); }
+  .proj-prog-label { font-size: 12px; color: #93c5fd; font-weight: 600; }
+  .proj-actions { flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">🎬 ComfyUI 短剧工坊<small>MiniMax H3 视频生成流水线</small></div>
+  <span class="project-chip" id="projectChip">未创建项目</span>
+  <div class="spacer"></div>
+  <button class="icon-btn" id="btnSettings">⚙️ 设置</button>
+</header>
+
+<div class="steps" id="stepsBar"></div>
+
+<main>
+  <!-- ① 创建项目 -->
+  <section class="panel" id="panel-1">
+    <div class="card">
+      <h2>创建项目 <span class="step-tag">第 1 步</span></h2>
+      <div class="desc">先建项目，后面每一步的成果都会挂在这个项目下。</div>
+      <div class="grid">
+        <label class="field">项目名 <input type="text" id="projectName" placeholder="如：麦田告白"></label>
+        <label class="field">类型
+          <select id="projectType"><option>青春短剧</option><option>都市情感</option><option>悬疑剧情</option><option>产品解说</option><option>数字人口播</option></select>
+        </label>
+        <label class="field">画幅
+          <select id="projectAspect"><option>竖版 1080×1920</option><option>横版 1920×1080</option></select>
+        </label>
+        <label class="field">总时长预算
+          <select id="projectBudget"><option>1 分钟</option><option>1-3 分钟</option><option>3-5 分钟</option><option>5 分钟以上</option></select>
+        </label>
+      </div>
+      <div class="row">
+        <button class="btn primary" id="btnCreateProject">创建项目 →</button>
+        <button class="btn ghost" id="btnNewProject">＋ 新建项目</button>
+        <button class="btn blue" id="btnToScript" style="display:none">下一步：脚本生成 →</button>
+        <span class="hint" id="projectHint"></span>
+      </div>
+    </div>
+    <div class="card" id="projectListCard" style="margin-top:18px">
+      <h2>已创建项目 <span class="step-tag">项目库</span></h2>
+      <div class="desc">创建过的项目都会列在这里，可随时打开继续。</div>
+      <div id="projectList"><div class="empty">还没有项目，先在上方创建一个</div></div>
+    </div>
+  </section>
+
+  <!-- ② 脚本生成 -->
+  <section class="panel" id="panel-2">
+    <div class="card">
+      <h2>脚本生成 <span class="step-tag">第 2 步</span></h2>
+      <div class="desc">输入剧情梗概，AI 生成完整分镜剧本（场景 / 角色 / 动作 / 对白 / 时长）。</div>
+      <label class="field" style="margin-bottom:12px">剧情梗概 / 题材
+        <textarea id="topicInput" rows="3" placeholder="如：1980 年代乡村中学，男孩在麦田向女孩告别，两人约定十年后重逢……"></textarea>
+      </label>
+      <div class="grid">
+        <label class="field">风格
+          <input type="text" id="styleInput" value="怀旧温情，1980s 中国乡村校园">
+        </label>
+        <label class="field">段数
+          <input type="number" id="segmentsInput" value="10" min="3" max="20">
+        </label>
+      </div>
+      <div class="row">
+        <button class="btn blue" id="btnGenScript">🤖 AI 生成剧本</button>
+        <button class="btn ghost" id="btnPasteScript">📋 粘贴剧本（片段 / JSON）</button>
+        <span class="hint" id="genHint"></span>
+      </div>
+      <div id="scriptTableWrap"></div>
+    </div>
+  </section>
+
+  <!-- ③ 改写脚本 -->
+  <section class="panel" id="panel-3">
+    <div class="card">
+      <h2>改写脚本 <span class="step-tag">第 3 步</span></h2>
+      <div class="desc">AI 理顺对白逻辑、优化动作衔接。左右对比，可继续改写，可手动编辑，确认后进入下一步。</div>
+      <div class="row">
+        <button class="btn blue" id="btnRewrite">🤖 AI 改写</button>
+        <button class="btn green" id="btnConfirmScript" disabled>✓ 确认使用改写后</button>
+        <span class="hint" id="rewriteHint"></span>
+      </div>
+      <div class="compare">
+        <div class="compare-col before"><h3>改写前</h3><div id="beforeScript"><div class="empty"><div class="big">📝</div>先在「脚本生成」生成或粘贴剧本</div></div></div>
+        <div class="compare-col after"><h3>改写后</h3><div id="afterScript"><div class="empty"><div class="big">✨</div>点击「AI 改写」生成</div></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ④ 规范提示词 -->
+  <section class="panel" id="panel-4">
+    <div class="card">
+      <h2>生成规范提示词 <span class="step-tag">第 4 步</span></h2>
+      <div class="desc">把剧本每段扩写成 H3 规范三段式提示词（环境 / 光线 / 动作 / 情绪 / 运镜 / 声音），可逐段编辑。</div>
+      <div class="row">
+        <button class="btn primary" id="btnBuildPrompts">✨ 生成 H3 规范提示词</button>
+        <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="promptLlm" checked> AI 智能扩写（慢但完整）</label>
+        <span class="hint" id="promptHint"></span>
+      </div>
+      <div id="promptCards"></div>
+    </div>
+  </section>
+
+  <!-- ⑤ 参考资产 -->
+  <section class="panel" id="panel-5">
+    <div class="card">
+      <h2>参考资产 <span class="step-tag">第 5 步</span></h2>
+      <div class="desc">为角色生成锚点图、为场景生成参考图、为每段生成分镜图，保证生成视频时人物 / 场景 / 构图一致。生图走本地 Boogu-Image（快），图自动存入 <code>素材/</code> 目录。</div>
+      <div class="row">
+        <span id="booguStatus" style="font-size:12px;color:var(--muted)">检测本地生图服务…</span>
+        <span style="flex:1"></span>
+        <button class="btn" id="btnReverifyAssets">🩺 补质检（已有图）</button>
+        <button class="btn green" id="btnGenAllAssets">⚡ 一键生成全部参考图</button>
+      </div>
+      <h3 style="font-size:14px;margin:16px 0 10px">📋 资产状态表 <span class="hint">（身份/状态分开；扩写与生图从这里取服装发型，一字不差，防止文字与参考图打架）</span></h3>
+      <div id="assetStateBox"></div>
+      <h3 style="font-size:14px;margin:16px 0 10px">👤 角色锚点图 <span class="hint">（生成后点「设为角色参考图」进链式 R2V）</span></h3>
+      <div id="roleAssets" class="grid"></div>
+      <h3 style="font-size:14px;margin:16px 0 10px">🏞️ 场景参考图</h3>
+      <div id="sceneAssets" class="grid"></div>
+      <h3 style="font-size:14px;margin:16px 0 10px">🎬 分镜图（每段故事板）</h3>
+      <label style="font-size:12px;color:var(--muted);margin-bottom:10px;display:inline-block">
+        <input type="checkbox" id="storyAiPrompt" checked> 🤖 AI 按剧情生成规范提示词（更符合情节，略慢）
+      </label>
+      <div id="storyAssets" class="grid"></div>
+      <h3 style="font-size:14px;margin:16px 0 10px">🎥 参考视频（动作/风格参考）</h3>
+      <div id="videoAssets">
+        <div class="row">
+          <input type="file" id="videoUpload" accept="video/*" style="display:none">
+          <button class="btn" id="btnUploadVideo">📤 上传参考视频</button>
+          <span class="hint" id="videoHint">上传后存到 <code>素材/</code> 目录，可在 R2V 链路里作为动作参考</span>
+        </div>
+        <div id="videoList" class="cards" style="margin-top:10px"></div>
+      </div>
+      <h3 style="font-size:14px;margin:16px 0 10px">📌 提交用参考图配置 <span class="hint">（上方生成后点「设为…」自动填入）</span></h3>
+      <div class="grid">
+        <label class="field">角色参考图 1
+          <select id="roleImage1"><option value="">无</option></select>
+        </label>
+        <label class="field">角色参考图 2
+          <select id="roleImage2"><option value="">无</option></select>
+        </label>
+        <label class="field">场景参考图
+          <select id="sceneImage"><option value="">无</option></select>
+        </label>
+        <label class="field">参考视频（R2V 动作参考）
+          <select id="refVideo"><option value="">无</option></select>
+        </label>
+      </div>
+      <div class="hint" style="margin-top:8px">💡 也可以手动把图放进 <code>素材/</code> 或 <code>出镜素材/</code> 目录，刷新后即可选用。</div>
+    </div>
+  </section>
+
+  <!-- ⑥ 预览确认 -->
+  <section class="panel" id="panel-6">
+    <div class="card">
+      <h2>预览确认 <span class="step-tag">第 6 步</span></h2>
+      <div class="desc">逐段检查：名称 / 时长 / 参考图 / 提示词完整性。有缺失会高亮标出。</div>
+      <div id="previewCards"></div>
+    </div>
+  </section>
+
+  <!-- ⑦ 提交生成 -->
+  <section class="panel" id="panel-7">
+    <div class="card">
+      <h2>提交生成 <span class="step-tag">第 7 步</span></h2>
+      <div class="desc">勾选链式衔接则上段末帧自动接下一段首帧；提交后实时监控。</div>
+      <div class="row">
+        <label style="font-size:13px"><input type="checkbox" id="chainMode"> 🔗 链式衔接（上段末帧 → 下段首帧）</label>
+        <label style="font-size:13px"><input type="checkbox" id="qualityMode" checked> 🎧 成片质量（无加速LoRA·20步，声音清晰，慢）</label>
+        <label style="font-size:13px">步数
+          <select id="stepsMode" style="width:150px">
+            <option value="4">4（极速预览）</option>
+            <option value="6">6（加速成片）</option>
+            <option value="8">8（加速成片）</option>
+            <option value="10">10</option>
+            <option value="20" selected>20（成片默认）</option>
+            <option value="30">30（更精细）</option>
+            <option value="50">50（最精细·慢）</option>
+          </select>
+        </label>
+        <label style="font-size:13px">分辨率
+          <select id="submitMp" style="width:170px">
+            <option value="">沿用各段默认</option>
+            <option value="0.4">0.4 · 480p 预览（快）</option>
+            <option value="1.0">1.0 · 768p 高清</option>
+            <option value="1.5">1.5 · 更清晰（慢）</option>
+          </select>
+        </label>
+        <button class="btn" id="btnApplyMp">一键应用到全部段</button>
+        <span style="flex:1"></span>
+        <button class="btn primary" id="btnSubmit">🚀 提交任务</button>
+        <button class="btn" id="btnRefreshStatus">刷新</button>
+      </div>
+      <div id="statusCards"><div class="empty"><div class="big">🎬</div>提交后这里实时显示每段状态</div></div>
+      <div class="card" style="margin-top:18px;box-shadow:none;background:#f8fafc">
+        <h2 style="font-size:15px">🎬 合成完整视频</h2>
+        <div class="desc">把所有已下载的视频段按顺序拼接成完整成片（转码约 1-3 分钟）。</div>
+        <div class="row">
+          <button class="btn green" id="btnAssemble">🎬 一键合成完整视频</button>
+          <span class="hint" id="assembleStatus"></span>
+        </div>
+        <div id="assembleResult" style="margin-top:12px"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ⑧ 记录导出 -->
+  <section class="panel" id="panel-8">
+    <div class="card">
+      <h2>记录导出 <span class="step-tag">第 8 步</span></h2>
+      <div class="desc">每段实测耗时自动记录，方便参数对比。</div>
+      <div class="row">
+        <button class="btn" id="btnExport">📄 导出任务 CSV</button>
+        <button class="btn" id="btnRefreshRecords">刷新记录</button>
+        <button class="btn" style="color:var(--red)" id="btnClearHistory">🗑️ 清空历史任务</button>
+      </div>
+      <div class="tablewrap"><table id="recordsTable"><thead><tr><th>时间</th><th>名称</th><th>模式</th><th>时长</th><th>分辨率</th><th>耗时</th><th>状态</th><th>输出</th></tr></thead><tbody></tbody></table></div>
+      <div class="card" style="margin-top:18px;box-shadow:none;background:#f8fafc">
+        <h2 style="font-size:15px">🔄 生成记录（每次提交 = 一个版本批次）</h2>
+        <div class="desc">记录每次提交的模式 / 参数 / 提示词指纹，便于对比"这次改了什么"；同一错误连续两批无改善就回上层，不继续抽卡。</div>
+        <div class="tablewrap"><table id="genLogTable"><thead><tr><th>时间</th><th>段数</th><th>成功</th><th>链式</th><th>镜头明细（模式/时长/MP/质量/步数/指纹）</th></tr></thead><tbody></tbody></table></div>
+      </div>
+      <div class="card" style="margin-top:18px;box-shadow:none;background:#f8fafc">
+        <h2 style="font-size:15px">🩺 失败码诊断速查</h2>
+        <div class="desc" id="failureCodesBox">加载失败码表…</div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 设置抽屉 -->
+<div class="drawer-bg" id="drawerBg"></div>
+<div class="drawer" id="settingsDrawer">
+  <div class="d-head"><span>⚙️ 设置</span><button class="icon-btn" id="btnCloseDrawer">×</button></div>
+  <div class="d-body">
+    <label class="field">ComfyUI 服务器地址
+      <input type="text" id="serverInput" placeholder="http://127.0.0.1:8188">
+    </label>
+    <div class="row">
+      <button class="btn" id="btnCheck">连接测试</button>
+      <span id="connInfo" style="font-size:12px;color:var(--muted)"><span class="dot"></span>未测试</span>
+    </div>
+    <div class="cfg-block">
+      <div class="cfg-title">🧠 语言模型（剧本/提示词）</div>
+      <label class="field" style="flex-direction:row;align-items:center;gap:8px">使用
+        <select id="llmProvider" style="flex:1">
+          <option value="local">本地模型（LM Studio / Ollama）</option>
+          <option value="cloud">云端 API（OpenAI 兼容）</option>
+        </select>
+      </label>
+      <div id="llmCloudBox">
+        <label class="field">云端接口地址（base_url）
+          <input type="text" id="llmCloudUrl" placeholder="https://api.openai.com/v1">
+        </label>
+        <label class="field">云端模型名
+          <input type="text" id="llmCloudModel" placeholder="gpt-4o-mini / deepseek-chat / qwen-max">
+        </label>
+        <label class="field">云端 API Key
+          <input type="password" id="llmCloudKey" placeholder="sk-...">
+        </label>
+      </div>
+      <label class="field">本地模型地址
+        <input type="text" id="llmLocalUrl" placeholder="http://127.0.0.1:1234">
+      </label>
+      <label class="field">本地模型名
+        <input type="text" id="llmLocalModel" placeholder="qwen3.6-27b-abliterated-mlx">
+      </label>
+    </div>
+    <div class="cfg-block">
+      <div class="cfg-title">🖼️ 文生图模型（锚点图/场景图/分镜图）</div>
+      <label class="field" style="flex-direction:row;align-items:center;gap:8px">使用
+        <select id="imgProvider" style="flex:1">
+          <option value="local">本地（Boogu-Image）</option>
+          <option value="cloud">云端 API（OpenAI 兼容）</option>
+        </select>
+      </label>
+      <div id="imgCloudBox">
+        <label class="field">云端接口地址（base_url）
+          <input type="text" id="imgCloudUrl" placeholder="https://api.openai.com/v1">
+        </label>
+        <label class="field">云端图片模型
+          <input type="text" id="imgCloudModel" placeholder="gpt-image-1">
+        </label>
+        <label class="field">云端 API Key
+          <input type="password" id="imgCloudKey" placeholder="sk-...">
+        </label>
+      </div>
+      <label class="field">本地生图地址
+        <input type="text" id="imgLocalUrl" placeholder="http://127.0.0.1:8081">
+      </label>
+    </div>
+    <label class="field">LM Studio API Token（AI 扩写/生成用，留空用已保存）
+      <input type="password" id="lmToken" placeholder="sk-lm-...">
+    </label>
+    <div class="row">
+      <button class="btn" id="btnLmTest">测试 AI</button>
+      <span id="llmStatusLine">未测试</span>
+    </div>
+    <label class="field" style="flex-direction:row;align-items:center;gap:8px">
+      <input type="checkbox" id="autoDownload" checked> 生成完成后自动下载
+    </label>
+    <label class="field" style="flex-direction:row;align-items:center;gap:8px">
+      <input type="checkbox" id="autoEnhance" checked> 提交前自动补全提示词
+    </label>
+    <div class="row" style="margin-top:10px">
+      <button class="btn green" id="btnSaveConfig">💾 保存模型配置</button>
+      <span class="hint">写入项目根 config.json</span>
+    </div>
+    <div class="row" style="margin-top:18px">
+      <button class="btn blue" id="btnEditRules">✏️ 编辑 AI 规则</button>
+      <span class="hint">改剧本/提示词生成规则，保存后立即生效</span>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalBg">
+  <div class="modal">
+    <h3>📋 粘贴剧本</h3>
+    <div class="tabs">
+      <button class="tab-btn active" data-tab="tabFragment">📝 剧本片段（自然语言）</button>
+      <button class="tab-btn" data-tab="tabJson">📄 剧本 JSON / Prompt 块</button>
+    </div>
+    <div class="tab-panel active" id="tabFragment">
+      <div class="hint">直接粘贴剧情文字、小说片段或剧本片段，AI 自动转换为可拍摄的分镜剧本（保持人物/对白/情节不变，约 1-2 分钟）。</div>
+      <textarea id="pasteFragment" rows="10" style="width:100%;font-family:inherit;font-size:13px" placeholder="如：苏晚是被一阵细微的摩擦惊醒的。林深的手正贴在她腰侧……"></textarea>
+    </div>
+    <div class="tab-panel" id="tabJson">
+      <div class="hint">支持 Novel-Director / ArcReel / 通用分镜 JSON；也支持 H3 Prompt 分块自动识别。</div>
+      <textarea id="pasteBox" rows="10" style="width:100%;font-family:ui-monospace,monospace;font-size:12px" placeholder='{"title":"...","role_list":[...],"storyboard_list":[...]}'></textarea>
+    </div>
+    <div class="row" style="margin-top:10px;justify-content:flex-end">
+      <button class="btn" id="btnPasteCancel">取消</button>
+      <button class="btn primary" id="btnPasteOk">导入</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="ruleModalBg">
+  <div class="modal">
+    <h3>✏️ 编辑 AI 规则</h3>
+    <div class="row">
+      <select id="ruleSelect" style="flex:1"></select>
+      <button class="btn" id="btnRuleReset">恢复默认</button>
+    </div>
+    <div class="hint" id="ruleHint" style="margin-bottom:8px"></div>
+    <textarea id="ruleContent" rows="18" style="width:100%;font-family:ui-monospace,monospace;font-size:12px;line-height:1.7"></textarea>
+    <div class="row" style="margin-top:10px;justify-content:flex-end">
+      <button class="btn" id="btnRuleCancel">关闭</button>
+      <button class="btn primary" id="btnRuleSave">💾 保存并立即生效</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="promptModalBg">
+  <div class="modal" style="width:min(540px,92vw)">
+    <h3>💬 对话修改生图提示词</h3>
+    <div class="hint" id="promptModalHint" style="margin-bottom:10px"></div>
+    <textarea id="promptModalIn" rows="3" style="width:100%" placeholder="如：林夏改成扎马尾、穿蓝色碎花裙，画面更温暖明亮"></textarea>
+    <div class="row" style="margin-top:12px;justify-content:flex-end">
+      <button class="btn" id="promptModalCancel">取消</button>
+      <button class="btn primary" id="promptModalOk">✨ AI 修改并重新生成</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let images = [];
+let scriptBefore = null;   // 改写前剧本
+let scriptAfter = null;    // 改写后剧本（当前生效）
+let currentScript = null;  // 当前使用的剧本（确认后）
+let promptTasks = [];      // 规范提示词任务列表
+let pollTimer = null;
+let savedProject = null;
+let currentProjectName = '';
+let projectNames = new Set();
+const PROGRESS_LABELS = ['仅创建','剧本已生成','剧本已改写','提示词已生成','资产已生成','已提交任务','已出片'];
+const STEPS = ['创建项目','脚本生成','改写脚本','规范提示词','参考资产','预览确认','提交生成','记录导出'];
+
+// ---------- 步骤条 ----------
+function renderSteps() {
+  $('stepsBar').innerHTML = STEPS.map((s, i) =>
+    `<div class="step" data-step="${i+1}" onclick="goStep(${i+1})">
+      <div class="num"><span>${i+1}</span></div><div class="label">${s}</div>
+    </div>`).join('');
+}
+function goStep(n) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  $('panel-' + n).classList.add('active');
+  document.querySelectorAll('.step').forEach(el => {
+    el.classList.remove('active');
+    el.classList.toggle('done', parseInt(el.dataset.step) < n);
+  });
+  document.querySelector(`.step[data-step="${n}"]`).classList.add('active');
+  if (n === 7) refreshStatus();
+  if (n === 8) refreshRecords();
+  if (n === 6) renderPreview();
+  if (n === 3) {
+    if (scriptBefore) renderScriptCompare(scriptBefore, 'beforeScript');
+    if (scriptAfter) renderScriptCompare(scriptAfter, 'afterScript');
+  }
+  if (n === 5) { renderAssets(); checkBoogu(); loadMedia(); }
+  if (n === 4) renderPromptCards();
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+// ---------- Toast ----------
+let toastTimer = null;
+function toast(msg, isErr, duration) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.className = 'toast' + (isErr ? ' err' : ' ok');
+  el.style.display = 'block';
+  clearTimeout(toastTimer);
+  if (duration !== 0) {
+    toastTimer = setTimeout(() => el.style.display = 'none', duration || 4200);
+  }
+}
+function toastLoading(msg) { toast(msg, false, 0); }
+function toastClear() { clearTimeout(toastTimer); $('toast').style.display = 'none'; }
+function esc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function escAttr(s) { return esc(s); }
+
+// ---------- ① 创建项目 ----------
+async function createProject() {
+  const name = $('projectName').value.trim();
+  if (!name) { toast('请输入项目名', true); return; }
+  if (projectNames.has(name)) { toast(`项目名「${name}」已存在，请换一个`, true); return; }
+  // 点击创建项目 = 直接新建，不继承任何旧项目数据
+  const payload = {
+    name,
+    type: $('projectType').value,
+    aspect: $('projectAspect').value,
+    budget: $('projectBudget').value,
+    fresh: true,
+  };
+  const r = await fetch('/api/project', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
+  });
+  const d = await r.json();
+  if (!r.ok) { toast(d.error || '项目保存失败', true); return; }
+  const p = d.project || {};
+  currentProjectName = p.name || '';
+  resetWorkData();
+  $('projectChip').textContent = `${p.name || ''} · ${p.type || ''} · ${p.aspect || ''}`;
+  $('projectHint').textContent = '✅ 新项目已创建，已显示在下方项目库；可继续下一步：脚本生成';
+  $('btnToScript').style.display = 'inline-block';
+  await renderProjects();
+}
+
+function resetWorkData() {
+  scriptBefore = null;
+  scriptAfter = null;
+  currentScript = null;
+  promptTasks = [];
+  assetImgs = {role: {}, scene: {}, story: {}};
+  assetPrompts = {role: {}, scene: {}, story: {}};
+  assetMeta = {role: {}, scene: {}, story: {}};
+  sceneNames = [];
+  if ($('scriptTableWrap')) $('scriptTableWrap').innerHTML = '';
+  if ($('promptCards')) $('promptCards').innerHTML = '';
+  if ($('storyAssets')) $('storyAssets').innerHTML = '';
+  if ($('roleAssets')) $('roleAssets').innerHTML = '';
+  if ($('roleImage1')) $('roleImage1').value = '';
+  if ($('roleImage2')) $('roleImage2').value = '';
+  if ($('sceneImage')) $('sceneImage').value = '';
+}
+
+async function renderProjects() {
+  const box = $('projectList');
+  try {
+    const r = await fetch('/api/projects', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}),
+    });
+    const d = await r.json();
+    const list = d.projects || [];
+    projectNames = new Set(list.map(p => p.name));
+    if (!list.length) { box.innerHTML = '<div class="empty">还没有项目，先在上方创建一个</div>'; return; }
+    box.innerHTML = list.map(p => `
+      <div class="proj-item${p.current ? ' cur' : ''}">
+        <div class="proj-main">
+          <div class="proj-name">${esc(p.name)}${p.current ? '<span class="proj-cur">当前</span>' : ''}</div>
+          <div class="proj-meta">${esc(p.type || '')} · ${esc(p.aspect || '')} · ${esc(p.budget || '')} · ${esc(p.updated_at || '')}</div>
+          <div class="proj-progress">
+            <span class="proj-bar"><span style="width:${Math.max(3, (p.progress || 0) / 7 * 100)}%"></span></span>
+            <span class="proj-prog-label">进度 ${(p.progress || 0)}/7 · ${PROGRESS_LABELS[p.progress || 0]}</span>
+          </div>
+        </div>
+        <div class="proj-actions">
+          <button class="btn ghost" onclick="continueProject('${escAttr(p.name)}', ${Math.min((p.progress || 0) + 2, 8)})">继续 →</button>
+        </div>
+      </div>`).join('');
+  } catch (e) { box.innerHTML = '<div class="empty">项目列表加载失败</div>'; }
+}
+
+async function continueProject(name, step) {
+  if (name !== currentProjectName) {
+    const ok = await openProject(name);
+    if (ok === false) return;
+  }
+  goStep(step);
+}
+
+async function openProject(name) {
+  const r = await fetch('/api/project/open', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name}),
+  });
+  const d = await r.json();
+  if (!r.ok) { toast(d.error || '打开项目失败', true); return false; }
+  currentProjectName = d.project.name || name;
+  await loadProject();
+  await renderProjects();
+  toast(`已打开项目：${d.project.name || name}`);
+  return true;
+}
+
+let saveTimer = null;
+function autoSaveProject(silent) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      const payload = {
+        name: $('projectName').value.trim() || '未命名项目',
+        type: $('projectType').value,
+        aspect: $('projectAspect').value,
+        budget: $('projectBudget').value,
+        current_script: currentScript,
+        script_before: scriptBefore,
+        script_after: scriptAfter,
+        prompt_tasks: promptTasks,
+        role_images: [$('roleImage1').value, $('roleImage2').value].filter(Boolean),
+        scene_image: $('sceneImage').value || null,
+        chain_mode: $('chainMode').checked,
+        asset_imgs: assetImgs,
+        asset_prompts: assetPrompts,
+        asset_meta: assetMeta,
+        asset_state: assetState,
+      };
+      const r = await fetch('/api/project', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload),
+      });
+      const d = await r.json();
+      if (d.project && d.project.name) {
+        $('projectChip').textContent = `${d.project.name} · ${d.project.type || ''} · ${d.project.aspect || ''}`;
+      }
+      if (!silent) toast('💾 项目已自动保存');
+    } catch (e) {}
+  }, 400);
+}
+
+// ---------- ② 脚本生成 ----------
+function renderScriptTable(script) {
+  const sb = script.storyboard_list || [];
+  if (!sb.length) { $('scriptTableWrap').innerHTML = '<div class="empty">剧本为空</div>'; return; }
+  const roles = (script.role_list || []).map(r => r.role_name || r.name || '').join('、');
+  $('scriptTableWrap').innerHTML = `
+    <div class="hint" style="margin-bottom:8px">🎬 <b>${esc(script.title || '')}</b> · ${sb.length} 段 · 角色：${esc(roles || '未定义')}</div>
+    <div class="tablewrap"><table>
+      <thead><tr><th>#</th><th>场景</th><th>角色</th><th>动作</th><th>对白</th><th>情绪</th><th>运镜</th><th>时长</th></tr></thead>
+      <tbody>${sb.map((s, i) => `<tr>
+        <td>${i+1}</td>
+        <td><input type="text" class="sb-scene" value="${esc(s.scene || '')}" style="width:110px"></td>
+        <td><input type="text" class="sb-roles" value="${esc((s.roles||[]).join('、'))}" style="width:100px"></td>
+        <td><input type="text" class="sb-action" value="${esc(s.action || '')}" style="width:200px"></td>
+        <td><input type="text" class="sb-dialogue" value="${esc(s.dialogue || '')}" style="width:200px"></td>
+        <td><input type="text" class="sb-emotion" value="${esc(s.emotion || '')}" style="width:100px"></td>
+        <td><input type="text" class="sb-camera" value="${esc(s.camera || '')}" style="width:110px"></td>
+        <td><input type="number" class="sb-duration" value="${s.duration || 10}" style="width:60px"></td>
+      </tr>`).join('')}</tbody>
+    </table></div>
+    <div class="hint" style="margin-top:8px">可直接在表格里修改，然后点「AI 改写」进入下一步，或点「确认使用」直接采用。</div>`;
+  $('scriptTableWrap').insertAdjacentHTML('beforeend', `
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" onclick="goStep(3)">下一步：改写脚本 →</button>
+      <button class="btn ghost" onclick="skipRewrite()">跳过改写，直接生成提示词</button>
+    </div>`);
+  $('btnConfirmScript').disabled = false;
+}
+
+async function generateScript() {
+  const topic = $('topicInput').value.trim();
+  if (!topic) { toast('请先填写剧情梗概', true); return; }
+  const btn = $('btnGenScript');
+  btn.disabled = true; btn.textContent = '🤖 AI 生成中（约 1-2 分钟）…';
+  $('genHint').textContent = '';
+  toastLoading('🤖 AI 正在生成剧本（约 1-2 分钟），完成前请勿关闭页面…');
+  try {
+    const r = await fetch('/api/generate_script', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({topic, style: $('styleInput').value, segments: parseInt($('segmentsInput').value) || 10, lmstudio_token: $('lmToken').value.trim()}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '生成失败', true); return; }
+    toastClear();
+    scriptBefore = d.script;
+    scriptAfter = null;
+    currentScript = d.script;
+    renderScriptTable(d.script);
+    $('genHint').textContent = `✅ 已生成 ${(d.script.storyboard_list||[]).length} 段`;
+    toast('剧本生成完成，进入下一步：改写脚本');
+    autoSaveProject(true);
+  } catch (e) { toast('生成异常：' + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '🤖 AI 生成剧本'; }
+}
+
+function openPasteModal() {
+  $('pasteFragment').value = '';
+  $('pasteBox').value = '';
+  $('modalBg').style.display = 'flex';
+}
+function closePasteModal() { $('modalBg').style.display = 'none'; }
+
+async function doPaste() {
+  const tab = document.querySelector('#modalBg .tab-btn.active').dataset.tab;
+  const text = (tab === 'tabFragment' ? $('pasteFragment') : $('pasteBox')).value.trim();
+  if (!text) return;
+  try {
+    let r;
+    if (tab === 'tabFragment') {
+      toastLoading('🤖 剧本片段 AI 转换中（约 1-2 分钟），完成前请勿关闭页面…');
+      r = await fetch('/api/parse_script_text', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({text, lmstudio_token: $('lmToken').value.trim()}),
+      });
+    } else {
+      toastLoading('导入解析中…');
+      r = await fetch('/api/import_script', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({text}),
+      });
+    }
+    const d = await r.json();
+    toastClear();
+    if (!r.ok) { toast(d.error, true); return; }
+    if (d.script) {
+      // AI 转换 / 剧本 JSON
+      scriptBefore = d.script;
+      currentScript = scriptBefore;
+      renderScriptTable(d.script);
+      $('genHint').textContent = `✅ AI 已转换为 ${(d.script.storyboard_list||[]).length} 段分镜`;
+      toast('剧本已转换，可在第 3 步改写或直接下一步');
+    } else {
+      const rows = d.tasks || [];
+      if (d.detected === 'prompts') {
+        scriptBefore = {title: '粘贴的提示词', storyboard_list: rows.map((t, i) => ({
+          id: i+1, scene: '', roles: [], action: '', dialogue: '', emotion: '',
+          camera: '', duration: t.duration, prompt: t.prompt, _promptMode: true,
+        }))};
+      } else {
+        scriptBefore = {title: '粘贴的剧本', role_list: [], storyboard_list: rows.map((t, i) => ({
+          id: i+1, scene: '', roles: [], action: '', dialogue: '', emotion: '',
+          camera: '', duration: t.duration, prompt: t.prompt,
+        }))};
+      }
+      currentScript = scriptBefore;
+      renderScriptTable(scriptBefore);
+      $('genHint').textContent = `✅ 已导入 ${rows.length} 段`;
+      toast('剧本已导入');
+    }
+    closePasteModal();
+  } catch (e) { toast('导入失败：' + e.message, true); }
+}
+
+// ---------- ③ 改写脚本 ----------
+function collectScriptFromTable() {
+  const rows = [...document.querySelectorAll('#scriptTableWrap tbody tr')];
+  if (!rows.length) return null;
+  const sb = rows.map((tr, i) => ({
+    id: i+1,
+    scene: tr.querySelector('.sb-scene').value,
+    roles: tr.querySelector('.sb-roles').value.split(/[、,，]/).map(s=>s.trim()).filter(Boolean),
+    action: tr.querySelector('.sb-action').value,
+    dialogue: tr.querySelector('.sb-dialogue').value,
+    emotion: tr.querySelector('.sb-emotion').value,
+    camera: tr.querySelector('.sb-camera').value,
+    duration: parseInt(tr.querySelector('.sb-duration').value) || 10,
+  }));
+  return {title: (scriptBefore && scriptBefore.title) || '剧本', logline: (scriptBefore && scriptBefore.logline) || '', role_list: (scriptBefore && scriptBefore.role_list) || [], storyboard_list: sb};
+}
+
+function renderScriptCompare(script, elId) {
+  const sb = script.storyboard_list || [];
+  $(elId).innerHTML = sb.map((s, i) => `<div class="sb-item">
+    <b>第 ${i+1} 段</b>
+    <span class="tag">${esc(s.scene || '场景?')}</span>
+    <span class="tag">${esc((s.roles||[]).join('/') || '角色?')}</span>
+    <span class="tag">${s.duration || 10}s</span><br>
+    <span style="color:var(--muted)">动作：</span>${esc(s.action || '—')}<br>
+    <span style="color:var(--muted)">对白：</span>${esc(s.dialogue || '—')}<br>
+    <span style="color:var(--muted)">情绪：</span>${esc(s.emotion || '—')}
+  </div>`).join('') || '<div class="empty">空</div>';
+}
+
+async function rewriteScript() {
+  const script = collectScriptFromTable() || scriptBefore;
+  if (!script || !(script.storyboard_list||[]).length) { toast('请先生成或导入剧本', true); return; }
+  scriptBefore = script;
+  renderScriptCompare(script, 'beforeScript');
+  const btn = $('btnRewrite');
+  btn.disabled = true; btn.textContent = '🤖 改写中（约 1-2 分钟）…';
+  $('rewriteHint').textContent = '';
+  toastLoading('🤖 AI 正在改写剧本（约 1-2 分钟），完成前请勿关闭页面…');
+  try {
+    const r = await fetch('/api/rewrite_script', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({script, lmstudio_token: $('lmToken').value.trim()}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '改写失败', true); return; }
+    toastClear();
+    scriptAfter = d.script;
+    renderScriptCompare(d.script, 'afterScript');
+    $('btnConfirmScript').disabled = false;
+    $('rewriteHint').textContent = '✅ 改写完成，右边是优化后的版本，可继续改写或确认';
+    toast('改写完成，请对比左右两侧');
+    autoSaveProject(true);
+  } catch (e) { toast('改写异常：' + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '🤖 AI 改写'; }
+}
+
+function confirmScript() {
+  if (scriptAfter) {
+    currentScript = scriptAfter;
+    renderScriptTable(scriptAfter);
+  } else if (scriptBefore) {
+    currentScript = collectScriptFromTable() || scriptBefore;
+  }
+  autoSaveProject(true);
+  toast('剧本已确认，进入下一步：生成规范提示词');
+  goStep(4);
+}
+
+function skipRewrite() {
+  currentScript = collectScriptFromTable() || scriptBefore || currentScript;
+  if (!currentScript || !(currentScript.storyboard_list || []).length) {
+    toast('请先生成或导入剧本', true); return;
+  }
+  toast('已跳过改写，进入提示词生成');
+  autoSaveProject(true);
+  goStep(4);
+}
+
+// ---------- ④ 规范提示词 ----------
+function scriptToTasks(script) {
+  const sb = script.storyboard_list || [];
+  return sb.map((s, i) => ({
+    name: `${script.title || '剧本'}_${String(i+1).padStart(2,'0')}`,
+    mode: 't2v', duration: s.duration || 10, mp: 1.0, image: '', images: [],
+    story_image: assetImgs.story[i] || '',
+    ref_video: $('refVideo') ? ($('refVideo').value || null) : null,
+    scene_image: $('sceneImage').value || null, no_bgm: true,
+    prefix: `video/${(script.title || 'script').replace(/\s+/g,'_')}_${String(i+1).padStart(2,'0')}`,
+    prompt: s.prompt || composeTaskPrompt(s, script),
+  }));
+}
+function composeTaskPrompt(s, script) {
+  const roles = (s.roles||[]).map(rn => {
+    const r = (script.role_list||[]).find(x => (x.role_name||x.name) === rn);
+    return r ? `${rn}（${r.role_desc || ''}）` : rn;
+  }).join('、');
+  const parts = [];
+  if (s.scene) parts.push(`环境为${s.scene}`);
+  if (roles) parts.push(`画面人物：${roles}`);
+  if (s.action) parts.push(`动作：${s.action}`);
+  if (s.dialogue) parts.push(`人物用中文清晰说出对白：<d>[Chinese] ${s.dialogue}</d>`);
+  parts.push(`镜头${s.camera || '缓慢推进'}`);
+  const desc = parts.join('，') + '。';
+  return `integrated_multimodal_description: [Shot 1] ${desc}\n\noverall_soundscape: 自然的环境声，清晰的人声对白，无背景音乐。\n\nnon_diegetic_music: N/A`;
+}
+
+async function buildPrompts() {
+  if (!currentScript) { toast('请先在第 2/3 步生成并确认剧本', true); return; }
+  const btn = $('btnBuildPrompts');
+  const useLlm = $('promptLlm').checked;
+  btn.disabled = true; btn.textContent = useLlm ? '✨ AI 扩写中（可能数分钟）…' : '生成中…';
+  $('promptHint').textContent = '';
+  try {
+    const hasPrompt = (currentScript.storyboard_list || []).some(s => s.prompt);
+    if (useLlm) {
+      toastLoading('✨ AI 扩写启动中…');
+      // Prompt 模式 → 拼成 Prompt 分块走 AI 润色；剧本模式 → 直接 AI 扩写
+      const text = hasPrompt
+        ? (currentScript.storyboard_list || []).map((s, i) =>
+            `Prompt ${i+1}（0:00-0:${s.duration || 10}）\n\nCopy\n${s.prompt}`).join('\n\n')
+        : JSON.stringify(currentScript);
+      const r = await fetch('/api/expand_script', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({text, use_llm: true, async: true, lmstudio_token: $('lmToken').value.trim()}),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error, true); return; }
+      pollExpandTask(d.task_id);
+      return; // 轮询接管后续
+    } else {
+      let tasks = scriptToTasks(currentScript);
+      const r = await fetch('/api/enhance_all', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({tasks}),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error, true); return; }
+      toastClear();
+      promptTasks = d.tasks || tasks;
+    }
+    renderPromptCards();
+    $('promptHint').textContent = `✅ 已生成 ${promptTasks.length} 段规范提示词${useLlm ? '（AI 扩写）' : '（规则补全）'}，可直接编辑`;
+    toast(useLlm ? 'AI 扩写完成' : '规范提示词生成完成');
+    autoSaveProject(true);
+  } catch (e) { toast('生成异常：' + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '✨ 生成 H3 规范提示词'; }
+}
+
+function renderPromptCards() {
+  if (!promptTasks.length) {
+    const hasScript = currentScript && (currentScript.storyboard_list || []).length > 0;
+    $('promptCards').innerHTML = hasScript
+      ? `<div class="empty" style="border:1px dashed var(--line);border-radius:12px">
+      <div class="big">✨</div>
+      还没有规范提示词<br><br>
+      <button class="btn primary" onclick="buildPrompts()">✨ 生成 H3 规范提示词</button>
+      <div class="hint" style="margin-top:8px">用当前剧本逐段生成（AI 扩写约 1 分钟/段，有实时进度）</div>
+    </div>`
+      : `<div class="empty" style="border:1px dashed var(--line);border-radius:12px">
+      <div class="big">📝</div>
+      还没有剧本<br><br>
+      <button class="btn" onclick="goStep(2)">← 先去第 2 步生成剧本</button>
+    </div>`;
+    return;
+  }
+  $('promptCards').innerHTML = promptTasks.map((t, i) => `<div class="pcard">
+    <div class="head">
+      <span class="name">${esc(t.name)}</span>
+      <span class="pill queued">${t.mode.toUpperCase()}</span>
+      <span class="pill queued">${t.duration}s</span>
+      <select class="p-mp" data-i="${i}" style="width:110px;font-size:12px;padding:4px">
+        <option value="0.4" ${Math.abs(parseFloat(t.mp || 1.0) - 0.4) < 0.01 ? 'selected' : ''}>0.4 · 480p 预览（快）</option>
+        <option value="1.0" ${Math.abs(parseFloat(t.mp || 1.0) - 1.0) < 0.01 ? 'selected' : ''}>1.0 · 768p 高清</option>
+        <option value="1.5" ${Math.abs(parseFloat(t.mp || 1.0) - 1.5) < 0.01 ? 'selected' : ''}>1.5 · 更清晰（慢）</option>
+      </select>
+    </div>
+    <textarea class="p-prompt" data-i="${i}">${esc(t.prompt)}</textarea>
+  </div>`).join('');
+}
+
+function pollExpandTask(tid) {
+  const btn = $('btnBuildPrompts');
+  btn.disabled = true; btn.textContent = '✨ AI 扩写中…';
+  toastLoading('✨ AI 扩写进行中，页面刷新不影响生成…');
+  const poll = setInterval(async () => {
+    try {
+      const pr = await fetch(`/api/expand_progress?task_id=${encodeURIComponent(tid)}`);
+      const pd = await pr.json();
+      if (pd.status === 'running' || pd.status === 'queued') {
+        $('promptHint').textContent = `🤖 扩写中：${pd.done}/${pd.total} 段完成${pd.current ? ' · ' + pd.current : ''}（约 1 分钟/段）`;
+      } else {
+        clearInterval(poll);
+        toastClear();
+        btn.disabled = false; btn.textContent = '✨ 生成 H3 规范提示词';
+        if (pd.status === 'done') {
+          promptTasks = pd.tasks || [];
+          renderPromptCards();
+          $('promptHint').textContent = `✅ 已生成 ${promptTasks.length} 段规范提示词（AI 扩写），可直接编辑`;
+          toast('AI 扩写完成');
+          autoSaveProject(true);
+        } else {
+          $('promptHint').textContent = '';
+          toast('扩写失败：' + (pd.error || '未知错误'), true);
+        }
+      }
+    } catch (e) {
+      clearInterval(poll);
+      toastClear();
+      btn.disabled = false; btn.textContent = '✨ 生成 H3 规范提示词';
+      toast('进度查询失败：' + e.message, true);
+    }
+  }, 3000);
+}
+
+async function resumeExpand() {
+  try {
+    const r = await fetch('/api/expand_current');
+    const d = await r.json();
+    if (d.active && (d.status === 'running' || d.status === 'queued')) {
+      toast(`检测到未完成的扩写任务（${d.done}/${d.total} 段），自动恢复显示…`);
+      goStep(4);
+      pollExpandTask(d.task_id);
+    }
+  } catch (e) {}
+}
+function collectPromptTasks() {
+  promptTasks.forEach((t, i) => {
+    const ta = document.querySelector(`.p-prompt[data-i="${i}"]`);
+    if (ta) t.prompt = ta.value.trim();
+    const mpSel = document.querySelector(`.p-mp[data-i="${i}"]`);
+    if (mpSel) t.mp = parseFloat(mpSel.value) || 1.0;
+  });
+  return promptTasks;
+}
+
+function applyMpAll() {
+  const v = $('submitMp').value;
+  if (!v) { toast('请先选择分辨率', true); return; }
+  promptTasks.forEach(t => { t.mp = parseFloat(v); });
+  document.querySelectorAll('.p-mp').forEach(sel => { sel.value = v; });
+  autoSaveProject(true);
+  toast(`✅ 已将所有段分辨率设为 ${v}MP`);
+}
+
+// ---------- ⑥ 预览 ----------
+function renderPreview() {
+  const tasks = collectPromptTasks();
+  if (!tasks.length) { $('previewCards').innerHTML = '<div class="empty"><div class="big">🔍</div>先在第 4 步生成规范提示词</div>'; return; }
+  $('previewCards').innerHTML = tasks.map((t, i) => {
+    const hasDesc = /integrated_multimodal_description/i.test(t.prompt || '');
+    const hasSound = /overall_soundscape/i.test(t.prompt || '');
+    const hasMusic = /non_diegetic_music/i.test(t.prompt || '');
+    const missing = [];
+    if (!hasDesc) missing.push('画面描述'); if (!hasSound) missing.push('环境声'); if (!hasMusic) missing.push('配乐字段');
+    const warn = missing.length ? `<div style="color:var(--red);font-size:12px;margin-top:6px">⚠️ 缺少：${missing.join('、')}</div>` : '';
+    // 提交时实际会用的参考图（与 submit 逻辑一致）
+    const refs = effectiveRefs(i);
+    const mode = refs.length ? `R2V ${refs.length} 参考` : 'T2V 文生';
+    const refText = refs.length ? refs.join('、') : '无（纯文生视频，人物一致性靠提示词）';
+    return `<div class="card-item">
+      <div class="r1"><span class="name">${esc(t.name)}</span><span class="pill ${missing.length?'error':'completed'}">${missing.length?'待补':'完整'}</span></div>
+      <div class="meta">${t.duration}s · ${t.mp}MP · ${parseInt($('stepsMode').value)||''}步 · 提交模式：${mode}</div>
+      <div class="outs" style="font-size:12px">参考图：${esc(refText)}</div>
+      <div class="outs" style="max-height:80px;overflow:auto">${esc((t.prompt||'').slice(0,260))}…</div>${warn}
+    </div>`;
+  }).join('');
+}
+
+function effectiveRefs(i) {
+  // 提交时实际参考图：项目资产优先（角色锚点图按角色顺序 + 本段场景图 + 本段分镜图），
+  // 下拉框里的手动选择只作补充，避免旧配置覆盖新资产
+  const roles = (currentScript && currentScript.role_list) || [];
+  const refs = [];
+  roles.slice(0, 2).forEach(r => {
+    const n = r.role_name || r.name;
+    if (assetImgs.role[n]) refs.push(assetImgs.role[n]);
+  });
+  const scene = ((currentScript && currentScript.storyboard_list) || [])[i] || {};
+  if (scene.scene && assetImgs.scene[scene.scene]) refs.push(assetImgs.scene[scene.scene]);
+  if (assetImgs.story[i]) refs.push(assetImgs.story[i]);
+  [$('roleImage1').value, $('roleImage2').value, $('sceneImage').value].forEach(v => {
+    if (v && !refs.includes(v)) refs.push(v);
+  });
+  return [...new Set(refs)].slice(0, 4);
+}
+
+// ---------- ⑦ 提交 / 状态 ----------
+async function submit() {
+  let tasks = collectPromptTasks();
+  tasks = tasks.filter(t => t.prompt);
+  if (!tasks.length) { toast('没有可提交的任务（请先在第 4 步生成提示词）', true); return; }
+  // 一键分辨率覆盖
+  const globalMp = $('submitMp').value;
+  if (globalMp) tasks = tasks.map(t => ({...t, mp: parseFloat(globalMp)}));
+  // 按参考资产自动定模式：角色/场景/分镜图 ≥2 → R2V；1 张 → I2V；无 → T2V
+  tasks = tasks.map((t, i) => {
+    const refs = effectiveRefs(i);
+    t.story_image = assetImgs.story[i] || '';
+    t.ref_video = $('refVideo').value || null;
+    t.quality = $('qualityMode').checked ? 'final' : 'preview';
+    t.steps = parseInt($('stepsMode').value) || undefined;
+    if (refs.length) { t.mode = 'r2v'; t.images = refs.slice(0, 4); t.image = ''; }
+    else { t.mode = 't2v'; t.image = ''; t.images = []; }
+    return t;
+  });
+  tasks = tasks.map((t, i) => ({...t, chain_prev: $('chainMode').checked && i > 0, chain_waiting: $('chainMode').checked && i > 0}));
+  if ($('autoEnhance').checked) {
+    try {
+      const r = await fetch('/api/enhance_all', {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({tasks}),
+      });
+      const d = await r.json();
+      if (r.ok) tasks = d.tasks;
+    } catch (e) { toast('自动补全失败：' + e.message, true); return; }
+  }
+  const btn = $('btnSubmit');
+  btn.disabled = true; btn.textContent = '提交中…';
+  try {
+    const r = await fetch('/api/submit', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        server: $('serverInput').value.trim(), tasks,
+        auto_download: $('autoDownload').checked,
+        chain_mode: $('chainMode').checked,
+        role_images: [$('roleImage1').value, $('roleImage2').value].filter(Boolean),
+        scene_image: $('sceneImage').value || null,
+      }),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '提交失败', true); return; }
+    const okN = d.results.filter(x => x.ok).length;
+    const bad = d.results.filter(x => !x.ok);
+    toast(`提交成功 ${okN}/${d.results.length}` + (bad.length ? `；跳过 ${bad.length}（${bad[0].error}）` : ''));
+    refreshStatus();
+    startPoll();
+  } catch (e) { toast('提交异常：' + e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '🚀 提交任务'; }
+}
+
+function pill(status) {
+  const map = {queued: '排队中', running: '生成中', completed: '已完成', error: '失败', waiting: '等待上段'};
+  return `<span class="pill ${status}">${map[status] || status}</span>`;
+}
+function fmtDur(sec) { if (sec == null) return '—'; return `${Math.floor(sec/60)}分${String(sec%60).padStart(2,'0')}秒`; }
+
+async function refreshStatus() {
+  const server = $('serverInput').value.trim();
+  try {
+    const r = await fetch(`/api/status?server=${encodeURIComponent(server)}`);
+    const d = await r.json();
+    if (!d.server_ok) { $('statusCards').innerHTML = '<div class="empty">⚠️ 服务器连接异常</div>'; return; }
+    if (!d.tasks.length) { $('statusCards').innerHTML = '<div class="empty"><div class="big">🎬</div>还没有任务，提交后这里显示状态</div>'; return; }
+    $('statusCards').innerHTML = `<div class="cards">${d.tasks.map(t => {
+      const active = ['running', 'queued', 'waiting'].includes(t.status);
+      const spin = active ? '<span class="spin"></span>' : '';
+      const outs = (t.outputs || []).map(o => {
+        const isVideo = /\.(mp4|webm|mov)$/i.test(o.filename || '');
+        const vid = (isVideo && t.downloaded)
+          ? `<video src="/media/${encodeURIComponent(o.filename)}" controls preload="metadata" style="width:100%;border-radius:8px;margin-top:6px;background:#000"></video>`
+          : '';
+        const dl = (isVideo && !t.downloaded)
+          ? ` <a href="/media/${encodeURIComponent(o.filename)}" download style="color:var(--blue)">下载预览</a>`
+          : '';
+        return `<div class="outs">${o.kind}: ${esc(o.filename)} ${t.downloaded ? '⬇️ 已下载' : '未下载'}${dl}</div>${vid}`;
+      }).join('');
+      const fc = t.failure_code
+        ? `<span class="pill error" title="查看第 8 步失败码速查表">${esc(t.failure_code)}</span>`
+        : '';
+      const err = t.error ? `<div class="outs" style="color:var(--red)">${fc} ${esc(t.error)}</div>` : '';
+      return `<div class="card-item${active ? ' generating' : ''}"><div class="r1"><span class="name">${esc(t.name)}</span><span style="display:flex;align-items:center;gap:7px">${spin}${pill(t.status)}</span></div>
+        <div class="meta">${t.mode.toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}</div>${outs}${err}</div>`;
+    }).join('')}</div>`;
+  } catch (e) { $('statusCards').innerHTML = '<div class="empty">状态刷新失败</div>'; }
+}
+function startPoll() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(refreshStatus, 8000);
+}
+
+// ---------- ⑧ 记录 ----------
+async function refreshRecords() {
+  try {
+    const r = await fetch('/api/records');
+    const d = await r.json();
+    const rows = d.records || [];
+    $('recordsTable').querySelector('tbody').innerHTML = rows.map(x => `<tr>
+      <td>${esc(x.timestamp||'')}</td><td>${esc(x.name||'')}</td><td>${esc(x.mode||'')}</td>
+      <td>${esc(x.duration_s||'')}s</td><td>${esc(x.megapixels||'')}MP</td>
+      <td>${esc(x.elapsed_sec ? fmtDur(parseInt(x.elapsed_sec)) : '—')}</td>
+      <td>${esc(x.status||'')}</td><td style="font-size:11px">${esc(x.outputs||'')}</td>
+    </tr>`).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--muted)">暂无记录</td></tr>';
+  } catch (e) {}
+  renderGenLog();
+  renderFailureCodes();
+}
+
+// 生成记录：每次提交 = 一个版本批次（P2 迭代可追溯）
+function renderGenLog() {
+  const tb = document.querySelector('#genLogTable tbody');
+  if (!tb) return;
+  tb.innerHTML = generationLog.length ? generationLog.slice().reverse().map(g => `
+    <tr>
+      <td>${esc(g.at || '')}</td>
+      <td>${g.count ?? ''}</td>
+      <td>${g.ok ?? ''}/${g.total ?? ''}</td>
+      <td>${g.chain_mode ? '✅' : '—'}</td>
+      <td style="font-size:11px">${(g.shots || []).map(s =>
+        `${esc(s.name)}: ${esc(s.mode || '')}/${s.duration || ''}s/${s.mp || ''}MP/${esc(s.quality || '')}/${s.steps ?? ''}步/${esc(s.prompt_fp || '')}`
+      ).join('<br>')}</td>
+    </tr>`).join('')
+    : '<tr><td colspan="5" style="text-align:center;color:var(--muted)">还没有提交记录</td></tr>';
+}
+
+// 失败码速查表（P2）：从规则文件加载
+async function renderFailureCodes() {
+  const box = $('failureCodesBox');
+  if (!box) return;
+  try {
+    const r = await fetch('/api/rules');
+    const d = await r.json();
+    const rule = (d.rules || []).find(x => x.name === 'failure_codes');
+    box.innerHTML = rule
+      ? `<div class="hint" style="white-space:pre-wrap;line-height:1.7;font-size:12px">${esc(rule.content)}</div>`
+      : '失败码表未配置';
+  } catch (e) { box.innerHTML = '加载失败'; }
+}
+
+async function assemble() {
+  const btn = $('btnAssemble');
+  btn.disabled = true;
+  $('assembleStatus').textContent = '🤖 合成中（约 1-3 分钟），请稍候…';
+  $('assembleResult').innerHTML = '';
+  try {
+    const r = await fetch('/api/assemble', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({project_name: $('projectName').value.trim()}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error, true); btn.disabled = false; return; }
+    const poll = setInterval(async () => {
+      try {
+        const pr = await fetch(`/api/assemble_progress?task_id=${encodeURIComponent(d.task_id)}`);
+        const pd = await pr.json();
+        $('assembleStatus').textContent = pd.message || '';
+        if (pd.status === 'done') {
+          clearInterval(poll);
+          btn.disabled = false;
+          $('assembleResult').innerHTML = `
+            <video src="/media/${encodeURIComponent(pd.filename)}" controls preload="metadata" style="width:100%;max-height:480px;border-radius:10px;background:#000"></video>
+            <div class="hint" style="margin-top:8px">✅ ${esc(pd.filename)}
+              <a href="/media/${encodeURIComponent(pd.filename)}" download style="color:var(--blue)">下载</a></div>`;
+          toast('🎬 合成完成');
+        } else if (pd.status === 'error') {
+          clearInterval(poll);
+          btn.disabled = false;
+          $('assembleStatus').textContent = '';
+          toast('合成失败：' + (pd.error || '未知错误'), true);
+        }
+      } catch (e) {
+        clearInterval(poll);
+        btn.disabled = false;
+        toast('进度查询失败：' + e.message, true);
+      }
+    }, 2000);
+  } catch (e) {
+    btn.disabled = false;
+    toast('合成失败：' + e.message, true);
+  }
+}
+
+async function exportCsv() {
+  const tasks = collectPromptTasks();
+  if (!tasks.length) { toast('没有任务可导出', true); return; }
+  const r = await fetch('/api/export', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({tasks}),
+  });
+  const d = await r.json();
+  const blob = new Blob(['\ufeff' + d.csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'tasks.csv'; a.click();
+}
+
+async function clearHistory() {
+  if (!confirm('确定清空服务端任务历史吗？已生成的文件不会删除。')) return;
+  const r = await fetch('/api/clear_history', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}),
+  });
+  const d = await r.json();
+  toast(`已清空，剩余 ${d.remaining} 条`);
+  refreshStatus();
+}
+
+// ---------- 设置 ----------
+function openDrawer() { $('settingsDrawer').classList.add('open'); $('drawerBg').style.display = 'block'; }
+function closeDrawer() { $('settingsDrawer').classList.remove('open'); $('drawerBg').style.display = 'none'; }
+async function checkConn() {
+  const server = $('serverInput').value.trim();
+  $('connInfo').innerHTML = '<span class="dot"></span>测试中…';
+  try {
+    const r = await fetch('/api/check', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({server})});
+    const d = await r.json();
+    $('connInfo').innerHTML = d.ok
+      ? `<span class="dot ok"></span>在线 · 排队${d.queue_pending} 运行${d.queue_running}`
+      : `<span class="dot bad"></span>失败：${esc(d.error)}`;
+  } catch (e) { $('connInfo').innerHTML = `<span class="dot bad"></span>请求失败：${esc(e.message)}`; }
+}
+async function checkLlm() {
+  const el = $('llmStatusLine');
+  el.textContent = '检测中…';
+  try {
+    const r = await fetch('/api/llm_check', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({lmstudio_token: $('lmToken').value.trim()})});
+    const d = await r.json();
+    el.textContent = d.ok && d.available ? `✅ ${d.model} 可用` : `⚠️ ${d.error || '模型不可用'}`;
+  } catch (e) { el.textContent = '⚠️ 检测失败'; }
+}
+
+// ---------- 模型配置（本地/云端） ----------
+function toggleCfgBoxes() {
+  $('llmCloudBox').style.display = $('llmProvider').value === 'cloud' ? '' : 'none';
+  $('imgCloudBox').style.display = $('imgProvider').value === 'cloud' ? '' : 'none';
+}
+
+async function loadConfigIntoForm() {
+  try {
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    const c = d || {};
+    if (c.comfyui && c.comfyui.server) $('serverInput').value = c.comfyui.server;
+    const llm = c.llm || {};
+    $('llmProvider').value = llm.provider || 'local';
+    if (llm.local) {
+      if (llm.local.url) $('llmLocalUrl').value = llm.local.url;
+      if (llm.local.model) $('llmLocalModel').value = llm.local.model;
+    }
+    if (llm.cloud) {
+      if (llm.cloud.base_url) $('llmCloudUrl').value = llm.cloud.base_url;
+      if (llm.cloud.model) $('llmCloudModel').value = llm.cloud.model;
+      if (llm.cloud.api_key) $('llmCloudKey').value = llm.cloud.api_key;
+    }
+    const img = c.image_gen || {};
+    $('imgProvider').value = img.provider || 'local';
+    if (img.local && img.local.url) $('imgLocalUrl').value = img.local.url;
+    if (img.cloud) {
+      if (img.cloud.base_url) $('imgCloudUrl').value = img.cloud.base_url;
+      if (img.cloud.model) $('imgCloudModel').value = img.cloud.model;
+      if (img.cloud.api_key) $('imgCloudKey').value = img.cloud.api_key;
+    }
+    toggleCfgBoxes();
+  } catch (e) {}
+}
+
+async function saveConfig() {
+  try {
+    // 先读当前配置，只覆盖模型相关项，保留 storage/vision/tts 等
+    const cur = await (await fetch('/api/config')).json();
+    const cfg = cur || {};
+    cfg.comfyui = cfg.comfyui || {};
+    cfg.comfyui.server = $('serverInput').value.trim();
+    cfg.llm = {
+      provider: $('llmProvider').value,
+      local: {url: $('llmLocalUrl').value.trim(), model: $('llmLocalModel').value.trim(), token: (cur.llm && cur.llm.local && cur.llm.local.token) || ''},
+      cloud: {
+        enabled: true,
+        base_url: $('llmCloudUrl').value.trim(),
+        api_key: $('llmCloudKey').value.trim(),
+        model: $('llmCloudModel').value.trim(),
+      },
+    };
+    cfg.image_gen = {
+      provider: $('imgProvider').value,
+      local: {url: $('imgLocalUrl').value.trim()},
+      cloud: {
+        enabled: true,
+        base_url: $('imgCloudUrl').value.trim(),
+        api_key: $('imgCloudKey').value.trim(),
+        model: $('imgCloudModel').value.trim(),
+      },
+    };
+    const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({config: cfg})});
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '保存失败', true); return; }
+    toast('💾 配置已保存并生效（API Key 请勿提交进 git）');
+  } catch (e) { toast('保存失败：' + e.message, true); }
+}
+
+// ---------- AI 规则编辑 ----------
+let rulesCache = [];
+
+async function openRuleModal() {
+  $('ruleModalBg').style.display = 'flex';
+  try {
+    const r = await fetch('/api/rules');
+    const d = await r.json();
+    rulesCache = d.rules || [];
+    $('ruleSelect').innerHTML = rulesCache.map(x =>
+      `<option value="${x.name}">${esc(x.title)}</option>`).join('');
+    showRule(rulesCache[0]);
+  } catch (e) { toast('规则加载失败：' + e.message, true); }
+}
+
+function showRule(rule) {
+  if (!rule) return;
+  $('ruleContent').value = rule.content;
+  $('ruleHint').textContent = `正在编辑：${rule.title}（rules/${rule.name}.md）`;
+}
+
+async function saveRule() {
+  const name = $('ruleSelect').value;
+  const content = $('ruleContent').value;
+  if (!content.trim()) { toast('规则内容不能为空', true); return; }
+  try {
+    const r = await fetch('/api/rule', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({name, content}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error, true); return; }
+    toast('✅ 规则已保存并立即生效（不用重启）');
+  } catch (e) { toast('保存失败：' + e.message, true); }
+}
+
+async function resetRule() {
+  const name = $('ruleSelect').value;
+  if (!confirm(`确定恢复「${$('ruleSelect').selectedOptions[0].text}」为内置默认吗？`)) return;
+  try {
+    const r = await fetch('/api/rule', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({name, reset: true}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error, true); return; }
+    // 重新加载当前规则内容
+    const r2 = await fetch('/api/rules');
+    const d2 = await r2.json();
+    rulesCache = d2.rules || [];
+    const cur = rulesCache.find(x => x.name === name);
+    if (cur) showRule(cur);
+    toast('✅ 已恢复内置默认');
+  } catch (e) { toast('恢复失败：' + e.message, true); }
+}
+
+// ---------- 初始化 ----------
+async function loadImages() {
+  try {
+    const r = await fetch('/api/images');
+    const d = await r.json();
+    images = d.images || [];
+    const opts = '<option value="">无</option>' + images.map(f => `<option value="${f}">${f}</option>`).join('');
+    $('roleImage1').innerHTML = opts;
+    $('roleImage2').innerHTML = opts;
+    $('sceneImage').innerHTML = opts;
+  } catch (e) {}
+  applyProjectSelections();
+}
+async function loadProject() {
+  try {
+    const r = await fetch('/api/project', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({})});
+    const d = await r.json();
+    const p = d.project || {};
+    if (p.name) {
+      currentProjectName = p.name;
+      $('projectName').value = p.name;
+      $('projectChip').textContent = `${p.name} · ${p.type||''} · ${p.aspect||''}`;
+      if (p.type) $('projectType').value = p.type;
+      if (p.aspect) $('projectAspect').value = p.aspect;
+      if (p.budget) $('projectBudget').value = p.budget;
+    }
+    // 恢复工作数据
+    if (p.script_before) scriptBefore = p.script_before;
+    if (p.script_after) scriptAfter = p.script_after;
+    if (p.current_script) {
+      currentScript = p.current_script;
+      renderScriptTable(currentScript);
+    }
+    if (p.prompt_tasks && p.prompt_tasks.length) {
+      promptTasks = p.prompt_tasks;
+      renderPromptCards();
+    }
+    if (p.asset_imgs) assetImgs = p.asset_imgs;
+    if (p.asset_prompts) assetPrompts = p.asset_prompts;
+    if (p.asset_meta) assetMeta = p.asset_meta;
+    if (p.asset_state) assetState = p.asset_state;
+    if (p.generation_log) generationLog = p.generation_log;
+    // 项目没存资产映射（旧版 bug）→ 扫描素材目录按命名规律自动恢复
+    if (!assetImgs.role || !Object.keys(assetImgs.role).length) {
+      try {
+        const r2 = await fetch('/api/scan_assets');
+        const d2 = await r2.json();
+        const a = d2.assets || {};
+        const rebuilt = {role: {}, scene: {}, story: {}};
+        ((currentScript && currentScript.role_list) || []).forEach(r => {
+          const n = r.role_name || r.name;
+          if (a.role[n]) rebuilt.role[n] = a.role[n];
+        });
+        sceneNames = [...new Set(((currentScript && currentScript.storyboard_list) || []).map(s => s.scene).filter(Boolean))];
+        sceneNames.forEach(sc => { if (a.scene[sc]) rebuilt.scene[sc] = a.scene[sc]; });
+        ((currentScript && currentScript.storyboard_list) || []).forEach((s, i) => {
+          if (a.story[i]) rebuilt.story[i] = a.story[i];
+        });
+        assetImgs = rebuilt;
+      } catch (e) {}
+    }
+    savedProject = p;
+    await renderProjects();
+    renderGenLog();
+  } catch (e) {}
+}
+
+function applyProjectSelections() {
+  const p = savedProject;
+  if (!p) return;
+  if (p.role_images) {
+    const [r1, r2] = p.role_images;
+    if (r1 && [...$('roleImage1').options].some(o => o.value === r1)) $('roleImage1').value = r1;
+    if (r2 && [...$('roleImage2').options].some(o => o.value === r2)) $('roleImage2').value = r2;
+  }
+  if (p.scene_image && [...$('sceneImage').options].some(o => o.value === p.scene_image)) {
+    $('sceneImage').value = p.scene_image;
+  }
+  if (typeof p.chain_mode === 'boolean') $('chainMode').checked = p.chain_mode;
+}
+
+// ---------- ⑤ 参考资产 ----------
+let assetImgs = {role: {}, scene: {}, story: {}};
+let assetPrompts = {role: {}, scene: {}, story: {}};
+let assetMeta = {role: {}, scene: {}, story: {}};
+let assetState = {roles: {}, scenes: {}};   // 资产状态表：身份/发型/服装/参考图/批准
+let generationLog = [];                      // 生成记录：每次提交一个版本批次
+let sceneNames = [];
+
+async function checkBoogu() {
+  const el = $('booguStatus');
+  try {
+    const r = await fetch('/api/boogu_check');
+    const d = await r.json();
+    el.textContent = d.ok ? '✅ Boogu 生图服务在线（本地生成）' : `⚠️ Boogu 未启动（${d.error || ''}）`;
+  } catch (e) { el.textContent = '⚠️ 检测失败'; }
+}
+
+function renderAssets() {
+  renderAssetState();
+  const roles = (currentScript && currentScript.role_list) || [];
+  $('roleAssets').innerHTML = roles.map((r, i) => {
+    const name = r.role_name || r.name || '角色' + (i + 1);
+    const img = assetImgs.role[name] || '';
+    const gSel = (assetImgs.roleGender && assetImgs.roleGender[name]) || inferGender(r.role_desc || '');
+    const genderOpts = ['女', '男', '未知'].map(g =>
+      `<option value="${g}" ${gSel === g ? 'selected' : ''}>${g}</option>`).join('');
+    const prompt = assetPrompts.role[name] || defaultRolePrompt(r, gSel);
+    return `<div class="card-item">
+      <div class="r1"><span class="name">${esc(name)}</span>${verifyBadge('role', name)}
+        <select class="g-sel" onchange="setRoleGender(${i}, this.value)" style="width:70px;font-size:12px;padding:4px">${genderOpts}</select>
+      </div>
+      <div class="meta">${esc(r.role_desc || '')}</div>
+      <img src="${img ? '/media/' + encodeURIComponent(img) : ''}" style="width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:#f1f4f9;display:${img ? 'block':'none'}">
+      <details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">📝 提示词（可编辑）</summary>
+        <textarea class="asset-prompt" data-kind="role" data-key="${esc(name)}" rows="4" style="width:100%;font-size:11px;margin-top:6px">${esc(prompt)}</textarea>
+      </details>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" onclick="genRoleImg(${i})">${img ? '🔄 重新生成' : '🖼️ 生成锚点图'}</button>
+        <button class="btn" onclick="openPromptModal('role', ${i})">💬 对话修改</button>
+        <button class="btn" onclick="setRoleRef(${i})" ${img ? '' : 'disabled'}>设为参考图 ${i + 1}</button>
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty" style="grid-column:1/-1">剧本还没有角色表（第 2/3 步生成后自动出现）</div>';
+
+  sceneNames = [...new Set(((currentScript && currentScript.storyboard_list) || []).map(s => s.scene).filter(Boolean))];
+  $('sceneAssets').innerHTML = sceneNames.map((sc, i) => {
+    const img = assetImgs.scene[sc] || '';
+    const prompt = assetPrompts.scene[sc] || defaultScenePrompt(sc);
+    return `<div class="card-item">
+      <div class="r1"><span class="name">${esc(sc)}</span>${verifyBadge('scene', sc)}</div>
+      <img src="${img ? '/media/' + encodeURIComponent(img) : ''}" style="width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:#f1f4f9;display:${img ? 'block':'none'}">
+      <details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">📝 提示词（可编辑）</summary>
+        <textarea class="asset-prompt" data-kind="scene" data-key="${esc(sc)}" rows="3" style="width:100%;font-size:11px;margin-top:6px">${esc(prompt)}</textarea>
+      </details>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" onclick="genSceneImg(${i})">${img ? '🔄 重新生成' : '🖼️ 生成'}</button>
+        <button class="btn" onclick="openPromptModal('scene', ${i})">💬 对话修改</button>
+        <button class="btn" onclick="setSceneRef(${i})" ${img ? '' : 'disabled'}>设为场景参考</button>
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty" style="grid-column:1/-1">剧本没有场景信息</div>';
+
+  const sb = (currentScript && currentScript.storyboard_list) || [];
+  $('storyAssets').innerHTML = sb.map((s, i) => {
+    const img = assetImgs.story[i] || '';
+    const prompt = assetPrompts.story[i] || defaultStoryPrompt(i);
+    return `<div class="card-item">
+      <div class="r1"><span class="name">分镜 ${i + 1} · ${esc(s.scene || '')}</span>${verifyBadge('story', i)}</div>
+      <img src="${img ? '/media/' + encodeURIComponent(img) : ''}" style="width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:#f1f4f9;display:${img ? 'block':'none'}">
+      <details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">📝 提示词（可编辑）</summary>
+        <textarea class="asset-prompt" data-kind="story" data-key="${i}" rows="4" style="width:100%;font-size:11px;margin-top:6px">${esc(prompt)}</textarea>
+      </details>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" onclick="genStoryImg(${i})">${img ? '🔄 重新生成' : '🎬 生成分镜图'}</button>
+        <button class="btn" onclick="openPromptModal('story', ${i})">💬 对话修改</button>
+      </div>
+    </div>`;
+  }).join('') || '<div class="empty" style="grid-column:1/-1">剧本还没有分镜</div>';
+}
+
+function inferGender(desc) {
+  const d = String(desc || '');
+  if (/女|女孩|少女|姑娘|她|辫子|裙/.test(d)) return '女';
+  if (/男|男孩|少年|小伙子|他/.test(d)) return '男';
+  return '未知';
+}
+
+// ---------- 📋 资产状态表（身份/状态分开，P1） ----------
+function renderAssetState() {
+  const box = $('assetStateBox');
+  if (!box) return;
+  const roles = (currentScript && currentScript.role_list) || [];
+  const sb = (currentScript && currentScript.storyboard_list) || [];
+  sceneNames = [...new Set(sb.map(s => s.scene).filter(Boolean))];
+  roles.forEach(r => {
+    const n = r.role_name || r.name;
+    if (n && !assetState.roles[n]) assetState.roles[n] = {};
+  });
+  // 场景描述自动预填：从剧本分镜提取（动作/氛围），避免状态表空着
+  const sbByScene = {};
+  sb.forEach(s => {
+    const k = s.scene || '';
+    if (k && !sbByScene[k]) sbByScene[k] = [];
+    if (k) sbByScene[k].push(s);
+  });
+  sceneNames.forEach(sc => {
+    if (!sc) return;
+    if (!assetState.scenes[sc]) assetState.scenes[sc] = {};
+    const s = assetState.scenes[sc];
+    if (!s.desc) {
+      const shots = sbByScene[sc] || [];
+      const actions = shots.slice(0, 2).map(x => x.action || '').filter(Boolean).join('；');
+      s.desc = actions ? `${sc}，1980年代中国乡村；${actions}` : `${sc}，1980年代中国乡村`;
+    }
+  });
+  const roleRows = roles.map((r, i) => {
+    const n = r.role_name || r.name;
+    const s = assetState.roles[n] || {};
+    const ref = assetImgs.role[n] || s.reference || '';
+    return `<div class="ast-row">
+      <div class="ast-name" title="${esc(n)}">${esc(n)}</div>
+      <input class="ast-in" data-kind="roles" data-key="${escAttr(n)}" data-field="identity" placeholder="身份不变量（脸型/体型）" value="${esc(s.identity || '')}">
+      <input class="ast-in" data-kind="roles" data-key="${escAttr(n)}" data-field="hair" placeholder="发型" value="${esc(s.hair || '')}">
+      <input class="ast-in" data-kind="roles" data-key="${escAttr(n)}" data-field="costume" placeholder="服装（与剧本描述一字不差）" value="${esc(s.costume || '')}">
+      <span class="ast-ref" title="${esc(ref)}">${ref ? esc(String(ref).split('/').pop()) : '未生成锚点图'}</span>
+      <label class="ast-ok"><input type="checkbox" data-kind="roles" data-key="${escAttr(n)}" data-field="approved" ${s.approved ? 'checked' : ''}> 批准</label>
+    </div>`;
+  }).join('');
+  const sceneRows = sceneNames.map((sc, i) => {
+    const s = assetState.scenes[sc] || {};
+    const ref = assetImgs.scene[sc] || s.reference || '';
+    return `<div class="ast-row">
+      <div class="ast-name" title="${esc(sc)}">${esc(sc)}</div>
+      <input class="ast-in ast-wide" data-kind="scenes" data-key="${escAttr(sc)}" data-field="desc" placeholder="场景描述（空间布局/氛围）" value="${esc(s.desc || '')}">
+      <span class="ast-ref" title="${esc(ref)}">${ref ? esc(String(ref).split('/').pop()) : '未生成场景图'}</span>
+      <label class="ast-ok"><input type="checkbox" data-kind="scenes" data-key="${escAttr(sc)}" data-field="approved" ${s.approved ? 'checked' : ''}> 批准</label>
+    </div>`;
+  }).join('');
+  box.innerHTML = (roles.length || sceneNames.length)
+    ? `<div class="ast-head"><span>名称</span><span>身份不变量</span><span>发型</span><span>服装 / 场景描述</span><span>参考图</span><span>批准</span></div>
+       ${roleRows}${sceneRows}`
+    : '<div class="empty">剧本还没有角色/场景（第 2/3 步生成后自动出现）</div>';
+}
+
+function bindAssetStateEvents() {
+  const box = $('assetStateBox');
+  if (!box) return;
+  box.addEventListener('input', (e) => {
+    const el = e.target;
+    const kind = el.dataset.kind, key = el.dataset.key, field = el.dataset.field;
+    if (!kind || !key || !field) return;
+    const store = kind === 'roles' ? assetState.roles : assetState.scenes;
+    store[key] = store[key] || {};
+    store[key][field] = el.checked !== undefined ? el.checked : el.value;
+    autoSaveProject(true);
+  });
+}
+
+function verifyBadge(kind, key) {
+  const m = assetMeta[kind] && assetMeta[kind][key];
+  if (!m) return '<span class="pill queued">未质检</span>';
+  if (m.verified) return '<span class="pill completed">✅ 已质检</span>';
+  const issue = (m.issues && m.issues[0]) || '未通过';
+  const tip = (m.issues || []).join('；');
+  return `<span class="pill error" title="${esc(tip)}">⚠️ ${esc(issue.slice(0, 18))}</span>`;
+}
+
+async function genAsset(kind, key, prompt, label) {
+  const tag = label || kind;
+  const fn = `${tag}_${String(key).replace(/[\\/:*?"<>|]/g, '').slice(0, 20)}_${Date.now().toString(36)}.png`;
+  // 角色/分镜质检期望（性别、形象），场景不查人物
+  let expected = {};
+  if (kind === 'role') {
+    const r = (currentScript.role_list || []).find(x => (x.role_name || x.name) === key);
+    const st = (assetState.roles && assetState.roles[key]) || {};
+    expected = {
+      gender: (assetImgs.roleGender && assetImgs.roleGender[key]) || inferGender((r && r.role_desc) || '') || '未知',
+      hair: st.hair || '',
+      costume: st.costume || '',
+      look: [st.hair, st.costume].filter(Boolean).join('，') || prompt.slice(0, 120),
+    };
+  } else if (kind === 'scene') {
+    const st = (assetState.scenes && assetState.scenes[key]) || {};
+    expected = {desc: st.desc || prompt.slice(0, 140)};
+  } else if (kind === 'story') {
+    const idx = typeof key === 'number' ? key : parseInt(key, 10);
+    const roles = ((currentScript.storyboard_list || [])[idx] || {}).roles || [];
+    expected = {look: prompt.slice(0, 160), people_count: Math.max(roles.length, 1)};
+  }
+  const r = await fetch('/api/asset_gen', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({prompt, filename: fn, kind, expected}),
+  });
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || '生图失败');
+  // 记录质检结果
+  assetMeta[kind][key] = {
+    verified: d.verified, issues: d.issues || [], attempts: d.attempts || 1,
+  };
+  return d.filename;
+}
+
+function defaultRolePrompt(r, gender) {
+  const genderZh = {女: '年轻女性', 男: '年轻男性', 未知: ''}[gender] || '';
+  const genderEn = {女: 'a young Chinese woman', 男: 'a young Chinese man', 未知: ''}[gender] || '';
+  const name = r.role_name || r.name || '';
+  const desc = r.role_desc || '';
+  const gText = genderZh || '根据名字与描述判断性别';
+  const gEn = genderEn || 'gender according to the description';
+  return `${gZhHead(gText)}，1980年代中国${desc || '乡村人物'}。${gEn}，半身肖像照，真实人物照片风格，自然光，简洁干净背景，面部清晰，双眼有神，胶片质感，写实摄影，单一人像，画面内无文字、无其他人物、无多余肢体`;
+}
+function gZhHead(t) { return t; }
+
+function defaultScenePrompt(sc) {
+  return `${sc}，1980年代中国乡村环境，写实场景照片，电影感，自然光，胶片质感，画面内无人物、无文字、无现代物品`;
+}
+
+function defaultStoryPrompt(i) {
+  // 中文分镜提示词：直接用剧本的中文要素（场景/动作/对白/情绪）
+  const s = (currentScript.storyboard_list || [])[i] || {};
+  const parts = [];
+  if (s.scene) parts.push(`场景：${s.scene}`);
+  if (s.action) parts.push(`动作：${s.action}`);
+  if (s.dialogue) parts.push(`对白：${s.dialogue}`);
+  if (s.emotion) parts.push(`情绪：${s.emotion}`);
+  const p = parts.join('。') + '。';
+  // 角色形象约束：从剧本角色表 + 锚点图提示词提炼，防止形象漂移
+  const roles = (currentScript && currentScript.role_list) || [];
+  const roleDesc = roles.map(r => {
+    const n = r.role_name || r.name;
+    const ap = assetPrompts.role[n] || '';
+    const gender = (assetImgs.roleGender && assetImgs.roleGender[n]) || inferGender(r.role_desc || '');
+    const g = gender === '女' ? '年轻女性' : gender === '男' ? '年轻男性' : '';
+    // 从锚点提示词里提取服装描述（碎花裙/外套等）
+    const dress = (ap.match(/(身穿[^，。]*|穿[^，。]*)/) || [])[0] || '';
+    const hair = (ap.match(/(扎[^，。]*|双[^，。]*辫|马尾[^，。]*)/) || [])[0] || '';
+    const bits = [g, hair, dress].filter(Boolean).join('，');
+    return `${n}（${bits || r.role_desc || ''}）`;
+  }).join('；');
+  const roleLine = roleDesc ? `画面人物形象必须与角色设定一致：${roleDesc}。` : '';
+  return p + `电影感故事板分镜图，竖构图，1980s 中国乡村风格，写实。${roleLine}`
+    + `画面中严格只有剧本出现的 ${Math.max((currentScript.storyboard_list || [])[i] && ((currentScript.storyboard_list || [])[i].roles || []).length || 0, 1)} 个人，`
+    + `绝对没有额外人物、没有多余的肢体/手臂/手从画面外伸入，每人四肢完整、各两只手、手指清晰不粘连，`
+    + `服装道具正常无穿帮，无文字乱码，无重复人物，无现代物品，无塑料包装盒，无饮料瓶`;
+}
+
+async function genRoleImg(i) {
+  const r = (currentScript.role_list || [])[i];
+  if (!r) return;
+  const name = r.role_name || r.name;
+  const ta = document.querySelector(`.asset-prompt[data-kind="role"][data-key="${CSS.escape(name)}"]`);
+  const prompt = (ta && ta.value.trim()) || defaultRolePrompt(r, assetImgs.roleGender && assetImgs.roleGender[name]);
+  assetPrompts.role[name] = prompt;
+  const btn = event.target; btn.disabled = true; btn.textContent = '生成中…';
+  toastLoading(`🖼️ 正在生成「${name}」锚点图（约 10-30 秒）…`);
+  try {
+    assetImgs.role[name] = await genAsset('role', name, prompt, '锚点');
+    assetState.roles[name] = assetState.roles[name] || {};
+    assetState.roles[name].reference = assetImgs.role[name];
+    renderAssets();
+    autoSaveProject(true);
+    toast(`✅ 「${name}」锚点图已生成，可设为参考图`);
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '🖼️ 生成锚点图'; }
+}
+
+async function genSceneImg(i) {
+  const sc = sceneNames[i];
+  if (!sc) return;
+  const ta = document.querySelector(`.asset-prompt[data-kind="scene"][data-key="${CSS.escape(sc)}"]`);
+  const prompt = (ta && ta.value.trim()) || defaultScenePrompt(sc);
+  assetPrompts.scene[sc] = prompt;
+  const btn = event.target; btn.disabled = true; btn.textContent = '生成中…';
+  toastLoading(`🖼️ 正在生成场景图「${sc}」（约 10-30 秒）…`);
+  try {
+    assetImgs.scene[sc] = await genAsset('scene', sc, prompt, '场景');
+    assetState.scenes[sc] = assetState.scenes[sc] || {};
+    assetState.scenes[sc].reference = assetImgs.scene[sc];
+    renderAssets();
+    autoSaveProject(true);
+    toast(`✅ 场景图「${sc}」已生成`);
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '🖼️ 生成'; }
+}
+
+async function genStoryImg(i) {
+  const ta = document.querySelector(`.asset-prompt[data-kind="story"][data-key="${i}"]`);
+  let prompt = (ta && ta.value.trim()) || defaultStoryPrompt(i);
+  // AI 按剧情生成规范提示词（用户手动编辑过的不覆盖）
+  if ($('storyAiPrompt').checked && !(ta && ta.value.trim())) {
+    toastLoading(`🤖 AI 正在按剧情生成分镜 ${i + 1} 提示词（约 20-40 秒）…`);
+    try {
+      const sb = (currentScript.storyboard_list || [])[i] || {};
+      const roles = ((currentScript.role_list || [])).map(r => ({
+        name: r.role_name || r.name,
+        desc: r.role_desc || '',
+        anchor_prompt: assetPrompts.role[r.role_name || r.name] || '',
+      }));
+      const r = await fetch('/api/story_prompt', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({storyboard: sb, roles, lmstudio_token: $('lmToken').value.trim()}),
+      });
+      const d = await r.json();
+      if (r.ok && d.prompt) {
+        prompt = d.prompt;
+        setAssetPrompt('story', i, prompt);
+      }
+    } catch (e) { /* AI 失败回退规则模板 */ }
+  }
+  assetPrompts.story[i] = prompt;
+  const btn = event.target; btn.disabled = true; btn.textContent = '生成中…';
+  toastLoading(`🎬 正在生成分镜 ${i + 1} 图（约 10-30 秒）…`);
+  try {
+    assetImgs.story[i] = await genAsset('story', `s${i + 1}`, prompt, '分镜');
+    renderAssets();
+    autoSaveProject(true);
+    toast(`✅ 分镜 ${i + 1} 图已生成`);
+  } catch (e) { toast(e.message, true); }
+  finally { btn.disabled = false; btn.textContent = '🎬 生成分镜图'; }
+}
+
+function setRoleGender(i, g) {
+  const r = (currentScript.role_list || [])[i];
+  if (!r) return;
+  const name = r.role_name || r.name;
+  assetImgs.roleGender = assetImgs.roleGender || {};
+  assetImgs.roleGender[name] = g;
+  // 更新提示词框为新的默认
+  const ta = document.querySelector(`.asset-prompt[data-kind="role"][data-key="${CSS.escape(name)}"]`);
+  if (ta) ta.value = defaultRolePrompt(r, g);
+  autoSaveProject(true);
+}
+
+// ---------- 💬 对话修改生图提示词 ----------
+let promptModalCtx = null;
+
+function assetPromptOf(kind, key) {
+  const map = {
+    role: () => {
+      const idx = (currentScript.role_list || []).findIndex(r => (r.role_name || r.name) === key);
+      const r = (currentScript.role_list || [])[idx];
+      return assetPrompts.role[key] || defaultRolePrompt(r, (assetImgs.roleGender && assetImgs.roleGender[key]) || inferGender(r && r.role_desc || ''));
+    },
+    scene: () => assetPrompts.scene[key] || defaultScenePrompt(key),
+    story: () => assetPrompts.story[key] || defaultStoryPrompt(key),
+  };
+  return (map[kind] || (() => ''))();
+}
+
+function openPromptModal(kind, idx) {
+  const roles = (currentScript && currentScript.role_list) || [];
+  let key, title;
+  if (kind === 'role') {
+    const r = roles[idx];
+    if (!r) { toast('没有角色数据', true); return; }
+    key = r.role_name || r.name;
+    title = `角色「${key}」锚点图`;
+  } else if (kind === 'scene') {
+    key = sceneNames[idx];
+    if (!key) { toast('没有场景数据', true); return; }
+    title = `场景「${key}」参考图`;
+  } else {
+    key = idx;
+    title = `分镜 ${idx + 1} 图`;
+  }
+  promptModalCtx = {kind, key, idx};
+  const cur = assetPromptOf(kind, key);
+  $('promptModalHint').textContent = `${title}\n当前提示词：${cur.slice(0, 100)}${cur.length > 100 ? '…' : ''}`;
+  $('promptModalIn').value = '';
+  $('promptModalBg').style.display = 'flex';
+}
+
+function setAssetPrompt(kind, key, prompt) {
+  assetPrompts[kind][key] = prompt;
+  const ta = document.querySelector(`.asset-prompt[data-kind="${kind}"][data-key="${CSS.escape(String(key))}"]`);
+  if (ta) ta.value = prompt;
+}
+
+async function doPromptModify() {
+  const instruction = $('promptModalIn').value.trim();
+  if (!instruction) { toast('请输入修改要求', true); return; }
+  const {kind, key} = promptModalCtx || {};
+  if (kind == null) return;
+  toastLoading('🤖 AI 正在修改提示词…');
+  try {
+    const r = await fetch('/api/asset_prompt', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({current_prompt: assetPromptOf(kind, key), instruction, lmstudio_token: $('lmToken').value.trim()}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error, true); return; }
+    setAssetPrompt(kind, key, d.prompt);
+    $('promptModalBg').style.display = 'none';
+    toast('✅ 提示词已修改，正在重新生成图片…');
+    autoSaveProject(true);
+    if (kind === 'role') await genRoleImg(promptModalCtx.idx);
+    else if (kind === 'scene') await genSceneImg(promptModalCtx.idx);
+    else await genStoryImg(promptModalCtx.idx);
+  } catch (e) { toast('修改失败：' + e.message, true); }
+}
+
+async function genAllAssets() {
+  if (!currentScript) { toast('请先生成剧本', true); return; }
+  const roles = (currentScript.role_list || []);
+  const sb = (currentScript.storyboard_list || []);
+  const total = roles.length + sceneNames.length + sb.length;
+  if (!total) { toast('没有可生成的资产', true); return; }
+  toastLoading(`⚡ 一键生成中（共 ${total} 张，每张约 10-30 秒）…`);
+  try {
+    for (let i = 0; i < roles.length; i++) {
+      const r = roles[i]; const name = r.role_name || r.name;
+      if (!assetImgs.role[name]) {
+        assetImgs.role[name] = await genAsset('role', name, `半身肖像照，1980年代中国${r.role_desc || '乡村人物'}，真实人物照片风格，自然光，简洁背景，面部清晰，胶片质感`, '锚点');
+        assetState.roles[name] = assetState.roles[name] || {};
+        assetState.roles[name].reference = assetImgs.role[name];
+      }
+    }
+    for (let i = 0; i < sceneNames.length; i++) {
+      const sc = sceneNames[i];
+      if (!assetImgs.scene[sc]) {
+        assetImgs.scene[sc] = await genAsset('scene', sc, `${sc}，1980年代中国乡村环境，写实场景照片，电影感，自然光，胶片质感，无人`, '场景');
+        assetState.scenes[sc] = assetState.scenes[sc] || {};
+        assetState.scenes[sc].reference = assetImgs.scene[sc];
+      }
+    }
+    for (let i = 0; i < sb.length; i++) {
+      if (!assetImgs.story[i]) {
+        assetImgs.story[i] = await genAsset('story', `s${i + 1}`, storyPrompt(i), '分镜');
+      }
+    }
+    renderAssets();
+    autoSaveProject(true);
+    toast(`✅ 一键生成完成，共 ${total} 张`);
+  } catch (e) { toast('一键生成中断：' + e.message, true); renderAssets(); }
+}
+
+// 给已有参考图补质检（老项目升级后一键补检，结果写入资产表）
+async function reverifyAssets() {
+  toastLoading('🩺 正在质检已有参考图（每张约 10-30 秒）…');
+  try {
+    const r = await fetch('/api/asset_reverify', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}),
+    });
+    const d = await r.json();
+    if (!r.ok) { toast(d.error || '质检失败', true); return; }
+    assetMeta = d.meta || assetMeta;
+    renderAssets();
+    autoSaveProject(true);
+    const res = d.results || [];
+    const bad = res.filter(x => !x.ok);
+    toast(bad.length
+      ? `⚠️ 质检完成：${res.length} 张，${bad.length} 张未通过（看徽章具体问题）`
+      : `✅ 质检完成：${res.length} 张全部通过`);
+  } catch (e) { toast('质检失败：' + e.message, true); }
+}
+
+function setRoleRef(i) {
+  const r = (currentScript.role_list || [])[i];
+  const name = r.role_name || r.name;
+  const fn = assetImgs.role[name];
+  if (!fn) { toast('请先生成锚点图', true); return; }
+  const sel = i === 0 ? $('roleImage1') : $('roleImage2');
+  if (![...sel.options].some(o => o.value === fn)) {
+    sel.insertAdjacentHTML('beforeend', `<option value="${fn}">${fn}</option>`);
+  }
+  sel.value = fn;
+  autoSaveProject(true);
+  toast(`✅ ${name} 已设为角色参考图 ${i + 1}`);
+}
+
+function setSceneRef(i) {
+  const sc = sceneNames[i];
+  const fn = assetImgs.scene[sc];
+  if (!fn) { toast('请先生成场景图', true); return; }
+  const sel = $('sceneImage');
+  if (![...sel.options].some(o => o.value === fn)) {
+    sel.insertAdjacentHTML('beforeend', `<option value="${fn}">${fn}</option>`);
+  }
+  sel.value = fn;
+  autoSaveProject(true);
+  toast(`✅ ${sc} 已设为场景参考图`);
+}
+
+// ---------- 参考视频 ----------
+async function loadMedia() {
+  try {
+    const r = await fetch('/api/media');
+    const d = await r.json();
+    const list = d.media || [];
+    const opts = '<option value="">无</option>' + list.map(f => `<option value="${f}">${f}</option>`).join('');
+    if ($('refVideo')) $('refVideo').innerHTML = opts;
+    $('videoList').innerHTML = list.map(f => `<div class="card-item">
+      <div class="r1"><span class="name" style="font-size:12px">${esc(f)}</span></div>
+      <video src="/media/${encodeURIComponent(f)}" controls style="width:100%;border-radius:8px;max-height:160px"></video>
+    </div>`).join('') || '<div class="empty" style="grid-column:1/-1">还没有参考视频</div>';
+  } catch (e) {}
+}
+
+async function uploadVideo(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const b64 = reader.result.split(',')[1];
+    toastLoading('📤 上传中…');
+    try {
+      const r = await fetch('/api/upload_media', {
+        method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({filename: file.name, data_b64: b64}),
+      });
+      const d = await r.json();
+      if (!r.ok) { toast(d.error, true); return; }
+      toast(`✅ 已上传 ${d.filename}`);
+      loadMedia();
+    } catch (e) { toast('上传失败：' + e.message, true); }
+  };
+  reader.readAsDataURL(file);
+}
+
+// ---------- 事件 ----------
+$('btnSettings').addEventListener('click', openDrawer);
+$('btnCloseDrawer').addEventListener('click', closeDrawer);
+$('drawerBg').addEventListener('click', closeDrawer);
+$('btnCreateProject').addEventListener('click', createProject);
+$('btnNewProject').addEventListener('click', () => {
+  $('projectName').value = '';
+  $('projectType').value = '青春短剧';
+  $('projectAspect').value = '竖版 1080×1920';
+  $('projectBudget').value = '1 分钟';
+  resetWorkData();
+  $('btnToScript').style.display = 'none';
+  $('projectHint').textContent = '已新建空白项目，输入项目名后点「创建项目」';
+});
+$('btnToScript').addEventListener('click', () => goStep(2));
+$('btnGenScript').addEventListener('click', generateScript);
+$('btnPasteScript').addEventListener('click', openPasteModal);
+$('btnPasteCancel').addEventListener('click', closePasteModal);
+$('btnPasteOk').addEventListener('click', doPaste);
+$('modalBg').addEventListener('click', e => { if (e.target === $('modalBg')) closePasteModal(); });
+document.querySelectorAll('#modalBg .tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('#modalBg .tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('#modalBg .tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    $(btn.dataset.tab).classList.add('active');
+  });
+});
+$('btnRewrite').addEventListener('click', rewriteScript);
+$('btnConfirmScript').addEventListener('click', confirmScript);
+$('btnBuildPrompts').addEventListener('click', buildPrompts);
+$('btnSubmit').addEventListener('click', submit);
+$('btnRefreshStatus').addEventListener('click', refreshStatus);
+$('btnApplyMp').addEventListener('click', applyMpAll);
+$('btnAssemble').addEventListener('click', assemble);
+$('btnExport').addEventListener('click', exportCsv);
+$('btnRefreshRecords').addEventListener('click', refreshRecords);
+$('btnClearHistory').addEventListener('click', clearHistory);
+$('btnCheck').addEventListener('click', checkConn);
+$('btnLmTest').addEventListener('click', checkLlm);
+$('btnSaveConfig').addEventListener('click', saveConfig);
+$('btnEditRules').addEventListener('click', openRuleModal);
+$('btnRuleCancel').addEventListener('click', () => $('ruleModalBg').style.display = 'none');
+$('btnRuleSave').addEventListener('click', saveRule);
+$('btnRuleReset').addEventListener('click', resetRule);
+$('ruleSelect').addEventListener('change', e => {
+  const cur = rulesCache.find(x => x.name === e.target.value);
+  showRule(cur);
+});
+$('ruleModalBg').addEventListener('click', e => { if (e.target === $('ruleModalBg')) $('ruleModalBg').style.display = 'none'; });
+$('promptModalCancel').addEventListener('click', () => $('promptModalBg').style.display = 'none');
+$('promptModalOk').addEventListener('click', doPromptModify);
+$('promptModalBg').addEventListener('click', e => { if (e.target === $('promptModalBg')) $('promptModalBg').style.display = 'none'; });
+['roleImage1', 'roleImage2', 'sceneImage'].forEach(id => {
+  $(id).addEventListener('change', () => autoSaveProject(true));
+});
+$('chainMode').addEventListener('change', () => autoSaveProject(true));
+$('qualityMode').addEventListener('change', () => {
+  $('stepsMode').value = $('qualityMode').checked ? '20' : '4';
+  autoSaveProject(true);
+});
+$('llmProvider').addEventListener('change', toggleCfgBoxes);
+$('imgProvider').addEventListener('change', toggleCfgBoxes);
+$('btnGenAllAssets').addEventListener('click', genAllAssets);
+$('btnReverifyAssets').addEventListener('click', reverifyAssets);
+$('btnUploadVideo').addEventListener('click', () => $('videoUpload').click());
+$('videoUpload').addEventListener('change', e => {
+  uploadVideo(e.target.files[0]);
+  e.target.value = '';
+});
+bindAssetStateEvents();
+$('scriptTableWrap').addEventListener('input', () => {
+  const s = collectScriptFromTable();
+  if (s) { currentScript = s; scriptBefore = s; autoSaveProject(true); }
+});
+$('promptCards').addEventListener('input', e => {
+  if (e.target.classList && e.target.classList.contains('p-prompt')) {
+    collectPromptTasks();
+    autoSaveProject(true);
+  }
+});
+
+renderSteps();
+loadImages();
+loadProject();
+renderProjects();
+checkConn();
+checkLlm();
+loadConfigIntoForm();
+resumeExpand();
+goStep(1);
+</script>
+</body>
+</html>
