@@ -2482,7 +2482,7 @@ async function genAllAssets() {
     }
     for (let i = 0; i < sb.length; i++) {
       if (!assetImgs.story[i]) {
-        assetImgs.story[i] = await genAsset('story', `s${i + 1}`, storyPrompt(i), '分镜');
+        assetImgs.story[i] = await genAsset('story', `s${i + 1}`, defaultStoryPrompt(i), '分镜');
       }
     }
     renderAssets();
