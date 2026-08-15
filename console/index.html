@@ -1339,8 +1339,9 @@ async function submit() {
   finally { btn.disabled = false; btn.textContent = '🚀 提交任务'; }
 }
 
-let statusShowAll = false;
 let statusTasksCache = [];
+let statusPage = 0;
+const statusPageSize = 12;
 function pill(status) {
   const map = {queued: '排队中', running: '生成中', completed: '已完成', error: '失败', waiting: '等待上段'};
   return `<span class="pill ${status}">${map[status] || status}</span>`;
@@ -1362,8 +1363,9 @@ async function refreshStatus() {
 function renderStatusCards() {
   const tasks = statusTasksCache;
   if (!tasks.length) return;
-  const activeN = tasks.filter(t => ['running', 'queued', 'waiting'].includes(t.status)).length;
-  const show = statusShowAll ? tasks : tasks.slice(0, Math.max(activeN, 8));
+  if (statusPage * statusPageSize >= tasks.length) statusPage = 0;
+  const pages = Math.ceil(tasks.length / statusPageSize);
+  const show = tasks.slice(statusPage * statusPageSize, (statusPage + 1) * statusPageSize);
   $('statusCards').innerHTML = `<div class="cards">${show.map(t => {
       const active = ['running', 'queued', 'waiting'].includes(t.status);
       const spin = active ? '<span class="spin"></span>' : '';
@@ -1391,11 +1393,11 @@ function renderStatusCards() {
         <div class="meta">${t.mode.toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}</div>${outs}${err}
         <div class="row" style="margin-top:8px">${regen}${del}</div></div>`;
     }).join('')}</div>`
-    + (tasks.length > show.length
-      ? `<div style="text-align:center;margin-top:10px">
-           <button class="btn" onclick="statusShowAll=!statusShowAll;renderStatusCards()">${statusShowAll ? '▲ 收起历史版本' : `▼ 显示全部 ${tasks.length} 个任务（含历史版本）`}</button>
-         </div>`
-      : '');
+    + (pages > 1 ? `<div class="row" style="margin-top:10px;justify-content:center;gap:12px;align-items:center">
+        <button class="btn" ${statusPage === 0 ? 'disabled' : ''} onclick="statusPage>0&&(statusPage--,renderStatusCards())">← 上一页</button>
+        <span class="hint">第 ${statusPage * statusPageSize + 1}-${Math.min((statusPage + 1) * statusPageSize, tasks.length)} / ${tasks.length} 个任务</span>
+        <button class="btn" ${statusPage >= pages - 1 ? 'disabled' : ''} onclick="statusPage<${pages - 1}&&(statusPage++,renderStatusCards())">下一页 →</button>
+      </div>` : '');
 }
 function startPoll() {
   clearInterval(pollTimer);
