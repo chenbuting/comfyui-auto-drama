@@ -662,6 +662,10 @@
       <input type="checkbox" id="regenSaveProject" style="width:auto">
       💾 同时更新到项目提示词库（以后第 4/6 步都用这版提示词）
     </label>
+    <div class="hint" style="font-size:11px;color:var(--muted);margin:-2px 0 8px 26px">
+      ✅ 勾选 = 永久保存：修改的提示词写回项目，第 4/6 步与后续合成都用新版<br>
+      ⚡ 不勾选 = 只对这一次生成生效：本次用新提示词出片，项目提示词库保持不变
+    </div>
     <div class="hint" style="margin-bottom:14px">注：重新生成为单段重跑，不参与链式衔接；如需整链请用第 7 步的链式提交。</div>
     <div class="row" style="justify-content:flex-end;gap:10px">
       <button class="btn" id="btnRegenCancel">取消</button>
