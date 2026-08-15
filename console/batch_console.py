@@ -714,6 +714,10 @@ SCENE_SOUNDS = {
     "办公室": "规律的键盘敲击声，雨点轻拍窗户声，低沉的办公环境嗡鸣。",
 }
 
+# 场景锚点兜底：默认关闭。写死的 1980s 乡村场景库仅适用于特定题材，
+# 对灾难/都市等题材会误注入（如把"卧室/床"写进城市洪水镜头）。
+ENABLE_SCENE_ANCHOR = False
+
 
 def _fix_dialogue_tags(desc):
     """对白标签兜底（方案 A 自动化）：把 <d> 内的角色名/动作移到标签外。
@@ -883,22 +887,37 @@ def enhance_prompt(prompt, task=None):
         else:
             p = p + neg
 
-    # 6. 场景锚点自动匹配
+    # 6. 场景锚点自动匹配（默认关闭：写死场景库会误注入不适配题材的环境）
     p_lower = p.lower()
-    for anchor in SCENE_ANCHORS:
-        hit = any(k.lower() in p_lower for k in anchor["keywords"])
-        if not hit:
-            continue
-        scene_desc = anchor["desc"]
-        # 场景参考图标签
-        scene_ref = ""
-        if scene_image and os.path.basename(scene_image) == anchor["image"]:
-            scene_ref = " and matching the scene environment shown in the scene reference picture"
-        elif anchor["image"]:
-            scene_ref = " and matching the established scene environment"
-        if desc:
-            p = p.replace(desc, desc + f" 环境为{scene_desc}{scene_ref}。", 1)
-        break
+    if ENABLE_SCENE_ANCHOR:
+        for anchor in SCENE_ANCHORS:
+            hit = any(k.lower() in p_lower for k in anchor["keywords"])
+            if not hit:
+                continue
+            scene_desc = anchor["desc"]
+            # 场景参考图标签
+            scene_ref = ""
+            if scene_image and os.path.basename(scene_image) == anchor["image"]:
+                scene_ref = " and matching the scene environment shown in the scene reference picture"
+            elif anchor["image"]:
+                scene_ref = " and matching the established scene environment"
+            if desc:
+                p = p.replace(desc, desc + f" 环境为{scene_desc}{scene_ref}。", 1)
+            break
+
+    # 6b. 分镜图构图引用：参考图里有分镜图时，明确其构图/机位/人物站位基准作用
+    for idx, img in enumerate(refs):
+        if str(img).startswith("分镜_") or str(img).startswith("story_"):
+            pic = idx + 1
+            comp = (
+                f" 本镜构图、机位、景别、人物站位与画面内容严格参照 <Picture {pic}>（分镜图）；"
+                "首帧按分镜图构图展开，人物位置与画面布局保持一致。"
+            )
+            if desc:
+                p = p.replace(desc, desc + comp, 1)
+            else:
+                p = p + comp
+            break
 
     # 9. 对白锁：逐字对白 + 口型边界 + 对白不视觉化
     if "<d>" in p and "lips" not in p_lower and "嘴唇" not in p:
