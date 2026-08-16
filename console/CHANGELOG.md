@@ -5,6 +5,19 @@
 
 ---
 
+## 2026-08-16 · v0.13.14 — 开源补 GitHub Issue/PR 模板
+
+### 本次更新内容
+
+- 新增 `.github/ISSUE_TEMPLATE/`：Bug 反馈、功能建议、模板选择配置
+- 新增 `.github/PULL_REQUEST_TEMPLATE.md`：PR 提交说明模板
+
+### 影响与注意事项
+
+- 纯仓库元数据；推送 GitHub 后 Issues / PR 页面自动生效
+
+---
+
 ## 2026-08-16 · v0.13.5 — 四视图正面槽兼容老项目锚点图
 
 ### 本次更新内容
