@@ -2052,6 +2052,16 @@ async function loadProject() {
       if (p.prompt_tasks.length > 1) $('chainMode').checked = true;
     }
     if (p.asset_imgs) assetImgs = p.asset_imgs;
+    // 老项目兼容：正面锚点图没登记进四视图槽时自动补登（roleViews.front）
+    if (assetImgs.role) {
+      assetImgs.roleViews = assetImgs.roleViews || {};
+      Object.keys(assetImgs.role).forEach(n => {
+        assetImgs.roleViews[n] = assetImgs.roleViews[n] || {};
+        if (!assetImgs.roleViews[n].front && assetImgs.role[n]) {
+          assetImgs.roleViews[n].front = assetImgs.role[n];
+        }
+      });
+    }
     if (p.asset_prompts) assetPrompts = p.asset_prompts;
     if (p.asset_meta) assetMeta = p.asset_meta;
     if (p.asset_state) assetState = p.asset_state;
@@ -2121,7 +2131,7 @@ function renderAssets() {
     const views = ((assetImgs.roleViews && assetImgs.roleViews[name]) || {});
     const viewMeta = {front: ['正面', '🖼️'], face: ['脸部', '👤'], side: ['侧面', '↔️'], back: ['背面', '⬅️']};
     const viewGrid = ['front', 'face', 'side', 'back'].map(v => {
-      const f = views[v] || '';
+      const f = (v === 'front' ? (views.front || img) : views[v]) || '';
       return `<div style="flex:1;min-width:0;text-align:center">
         <div style="width:100%;aspect-ratio:3/4;border-radius:6px;overflow:hidden;border:1px solid var(--line);background:#f1f4f9">
           ${f ? `<img src="/media/${encodeURIComponent(f)}" style="width:100%;height:100%;object-fit:cover">` : ''}
