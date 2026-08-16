@@ -3460,6 +3460,7 @@ def _normalize_llm_prompt(p):
     p = str(p or "").strip()
     if not p:
         return p
+    p = _renumber_shot_numbers(p)
     if not p.startswith("integrated_multimodal_description") and p.lstrip().startswith("["):
         p = "integrated_multimodal_description: " + p.lstrip()
     if "overall_soundscape:" not in p:
@@ -3467,6 +3468,26 @@ def _normalize_llm_prompt(p):
     if "non_diegetic_music:" not in p:
         p = p.rstrip() + "\n\nnon_diegetic_music: N/A"
     return p.strip()
+
+
+def _renumber_shot_numbers(prompt):
+    """把画面描述字段里的 [Shot N] 按出现顺序重新编号为 1,2,3…（第一镜必须是 [Shot 1]）。
+    只处理 integrated_multimodal_description / detailed_description 正文，
+    不动 I2V 首帧对齐头里的「来自 [Shot 1]」引用。"""
+    m = re.search(
+        r"((?:integrated_multimodal_description|detailed_description):\s*)(.*?)(?=\n\s*(?:overall_soundscape|non_diegetic_music):|\Z)",
+        prompt, re.S,
+    )
+    if not m:
+        return prompt
+    counter = [0]
+
+    def repl(mm):
+        counter[0] += 1
+        return f"[Shot {counter[0]}]"
+
+    new_body = re.sub(r"\[Shot \d+\]", repl, m.group(2))
+    return prompt[:m.start(2)] + new_body + prompt[m.end(2):]
 
 
 def parse_script_json(text):

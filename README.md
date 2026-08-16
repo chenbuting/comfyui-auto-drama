@@ -57,6 +57,24 @@ flowchart TB
 
 **链路一句话**：控制台把「剧本 → 提示词 → 参考资产」编排好，提交到远程 ComfyUI 用 H3 生成带原生立体声的视频，自动下载回本地合成成片；语言模型 / 文生图 / 质检全部支持本地与云端切换。
 
+## 目录结构
+
+```text
+comfyui项目/
+├── console/                  # Web 控制台（Python 标准库 + 原生前端，零第三方依赖）
+│   ├── batch_console.py      # 主服务：项目/剧本/提示词/资产/提交/监控/合成
+│   ├── chain_daemon.py       # 链式生成守护进程（自动推进下一段）
+│   ├── index.html            # 前端界面（单文件）
+│   ├── rules/                # AI 规则（剧本/扩写/生图提示词，可编辑热加载）
+│   └── start_daemons.py      # 一键启动 web + daemon（跨平台）
+├── workflows/                # ComfyUI 工作流模板与构建/合成脚本
+├── scripts/                  # 环境检查 / Boogu-Image 部署 / 备份
+├── config.example.json       # 配置示例（复制为 config.json）
+├── CONFIG.md                 # 配置说明
+├── requirements.txt          # Python 依赖（可选，用于部分脚本）
+└── LICENSE                   # MIT
+```
+
 ## 功能一览
 
 - 📜 **剧本流水线**：粘贴剧本片段 / 导入剧本 JSON → AI 生成或改写分镜剧本
