@@ -19,6 +19,20 @@
 
 ---
 
+## 2026-08-16 · v0.12.9 — 环境一键检查脚本 + 各平台安装命令文档
+
+### 本次更新内容
+
+- 新增 `scripts/check_env.py`：一键检查 Python / ffmpeg / config.json / 远程 ComfyUI / 语言模型 / 文生图 / 视觉质检，逐项 ✅/❌ + 修复建议（401 鉴权视为服务在线）
+- README 新增「一键环境检查 + 各平台安装命令」（macOS / Windows / Linux）
+- CONFIG.md 提示配好后先跑环境检查
+
+### 验证方式
+
+- 本地实测：Python / ffmpeg / ComfyUI / LLM / Boogu / 视觉全部 ✅
+
+---
+
 ## 2026-08-16 · v0.12.8 — 修复链式推进 400 真正根因（waiting 任务参考图未上传）
 
 ### 本次更新内容

@@ -25,6 +25,46 @@
 - 文本模型：本地 LM Studio / Ollama（OpenAI 兼容）或任意云端 API
 - 生图服务：本地 Boogu-Image（默认 `http://127.0.0.1:8081`）或云端 API
 
+### 1.5 一键环境检查
+
+```bash
+python3 scripts/check_env.py
+```
+
+脚本会检查：Python 版本、ffmpeg、config.json、远程 ComfyUI、语言模型（本地/云端）、文生图（本地/云端）、视觉质检，逐项输出 ✅/❌ 并给出修复建议。
+
+### 各平台安装命令
+
+**macOS（Apple Silicon）**
+
+```bash
+# ffmpeg
+brew install ffmpeg
+# 演示脚本依赖（控制台本体零依赖）
+python3 -m pip install -r requirements.txt
+# 本地生图 Boogu（Apple Silicon）
+bash scripts/deploy_boogu.sh
+```
+
+**Windows**
+
+```bat
+winget install ffmpeg
+winget install Python.Python.3.12
+python -m pip install -r requirements.txt
+```
+
+> Windows 无法本地跑 Boogu（MLX 仅 Apple Silicon），生图用云端：`config.json -> image_gen.provider: cloud`
+
+**Linux**
+
+```bash
+sudo apt update && sudo apt install -y ffmpeg python3 python3-pip
+python3 -m pip install -r requirements.txt
+```
+
+> Linux 同样无法本地跑 Boogu，用云端生图。
+
 ### 2. 配置
 
 ```bash
