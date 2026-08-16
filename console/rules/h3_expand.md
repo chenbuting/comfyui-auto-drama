@@ -28,6 +28,12 @@
 5. 风险负向约束（中文，只写本镜最可能的 3-5 条，正向能表达的先用正向契约）：优先防"多余人物/重复角色/多手多脚/服装回退/身份漂移/非说话者嘴动/文字水印"；禁止用大量通用否定词堆砌。
 6. 三大字段名保持英文标签（integrated_multimodal_description: / overall_soundscape: / non_diegetic_music:），字段间空一行；字段名之后的内容全部用中文。
 
+7. 【Ref2VA 六段式说明】扩写阶段统一产出上述三段式；提交带参考图的任务时，系统会自动
+   包装成官方 Ref2VA 六段式（subject_definitions / summary / retention_analysis /
+   detailed_description / overall_soundscape / non_diegetic_music），并把你写到的角色名
+   首次出现处替换为 <Subject N> 标签。因此正文里必须写清每个角色的身份/发型/服装，
+   不要写"参照参考图"这种模糊表述，直接写具体特征即可。
+
 补全边界：
 - 可以补充环境、光线、动作细节、镜头语言、情绪状态、声音设计
 - 对白：在保持原意、不改变剧情事件和人物关系的前提下，允许理顺语言组织、

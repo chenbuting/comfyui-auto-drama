@@ -21,7 +21,25 @@ R2V_TURBO_LORA = "minimax_h3_turbo_v4_step600_ema.safetensors"
 R2V_LORA_STRENGTH = 0.75
 R2V_STEPS = 4
 R2V_UNCENSORED_CLIP = "qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors"
+R2V_UNET_DEFAULT = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 R2V_FINAL_STEPS = 20
+R2V_MAX_IMAGES = 8  # 官方 Ref2VA 上限 9 张；默认 8（主角多视图 + 场景 + 分镜）
+
+
+def _r2v_cfg():
+    """从项目根 config.json 读 models.r2v（unet/clip），失败用默认值。"""
+    try:
+        with open(os.path.join(os.path.dirname(BASE), "config.json"), encoding="utf-8") as f:
+            d = json.load(f)
+        m = (d.get("models") or {}).get("r2v") or {}
+        max_n = int((d.get("console") or {}).get("max_ref_images") or R2V_MAX_IMAGES)
+        return {
+            "unet": m.get("unet") or R2V_UNET_DEFAULT,
+            "clip": m.get("clip") or R2V_UNCENSORED_CLIP,
+            "max_images": min(max_n, 9),
+        }
+    except Exception:
+        return {"unet": R2V_UNET_DEFAULT, "clip": R2V_UNCENSORED_CLIP, "max_images": R2V_MAX_IMAGES}
 
 # 纯 widget 节点：前端 widgets_values 顺序 → API input 名（无连接输入时按此映射）
 WIDGET_MAP = {
@@ -235,13 +253,18 @@ def build_r2v(task):
     """Ref2VA 工作流模板 → API 图。
 
     覆盖：
-    - CLIP：两档都用无审查模型（R2V_UNCENSORED_CLIP，用户要求保留）
-    - 参考图列表 task['images']（最多 3 张，依次填 ref_image_0/1/2）
+    - UNET：models.r2v.unet（官方 Ref2VA 权重；提交端检测缺失会回退并提示）
+    - CLIP：models.r2v.clip（默认无审查模型，用户要求保留）
+    - 参考图列表 task['images']（最多 8 张，依次填 ref_image_0..7，官方上限 9）
     - 提示词、时长、分辨率、输出前缀
     - 步数由 task['steps'] 控制（默认：成片档 20 / 快速档 4）
     - 步数 ≤8 时插入加速：UNET → TurboLoRA → SageAttention → Guider/Scheduler
       （turbo LoRA 只适配低步数，步数高时不插，避免劣化音频）
     """
+    cfg = _r2v_cfg()
+    unet_name = str(task.get("r2v_unet") or cfg["unet"])
+    clip_name = str(task.get("r2v_clip") or cfg["clip"])
+    max_images = min(int(cfg["max_images"]), 9)
     quality = str(task.get("quality") or "preview")
     is_final = quality == "final"
     steps = int(task.get("steps") or (R2V_FINAL_STEPS if is_final else R2V_STEPS))
@@ -280,16 +303,16 @@ def build_r2v(task):
     images = list(task.get("images") or [])
     if task.get("story_image") and task["story_image"] not in images:
         images.append(task["story_image"])
-    images = images[:4]
-    # 参考图多于现有 LoadImage 节点时，动态补充（ref_image_2/3 等）
-    for slot in range(len(load_ids), min(len(images), 4)):
+    images = images[:max_images]
+    # 参考图多于现有 LoadImage 节点时，动态补充（ref_image_2..7 等）
+    for slot in range(len(load_ids), min(len(images), max_images)):
         new_id = f"r2v_img_{slot}"
         api[new_id] = {
             "class_type": "LoadImage",
             "inputs": {"image": images[slot], "upload": "image"},
         }
         load_ids.append(new_id)
-    for slot, img in enumerate(images[:4]):
+    for slot, img in enumerate(images[:max_images]):
         if slot < len(load_ids):
             api[load_ids[slot]]["inputs"]["image"] = img
 
@@ -299,16 +322,17 @@ def build_r2v(task):
         ct = node["class_type"]
         if ct == "MiniMaxH3ReferenceToVideo":
             node["inputs"]["prompt"] = task["prompt"]
-            for slot, lid in enumerate(load_ids[:4]):
+            for slot, lid in enumerate(load_ids[:max_images]):
                 key = f"ref_images.ref_image_{slot}"
                 node["inputs"][key] = [lid, 0]
             # 未提供的参考图：断开连接（多余 LoadImage 会被 ComfyUI 忽略）
-            for slot in range(len(images), 4):
+            for slot in range(len(images), max_images):
                 key = f"ref_images.ref_image_{slot}"
                 node["inputs"][key] = None
         elif ct == "CLIPLoader":
-            node["inputs"]["clip_name"] = R2V_UNCENSORED_CLIP
+            node["inputs"]["clip_name"] = clip_name
         elif ct == "UNETLoader":
+            node["inputs"]["unet_name"] = unet_name
             unet_id = nid
         elif ct == "ResolutionSelector":
             node["inputs"]["aspect_ratio"] = "9:16 (Portrait Widescreen)"

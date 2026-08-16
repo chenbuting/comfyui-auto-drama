@@ -60,7 +60,13 @@ _CONFIG_DEFAULTS = {
         "cloud": {"enabled": False, "base_url": "https://api.openai.com/v1", "api_key": "", "model": "gpt-image-1"},
     },
     "vision": {"base_url": "http://127.0.0.1:8001/v1", "api_key": "", "model": "qwen-vl-max"},
-    "console": {"port": 8890},
+    "models": {
+        "r2v": {
+            "unet": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+            "clip": "qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
+        }
+    },
+    "console": {"port": 8890, "max_ref_images": 8},
 }
 
 
@@ -592,9 +598,10 @@ def ensure_i2v_prompt(prompt):
 
 
 def _extract_fields(prompt):
-    """提取 H3 三大字段，返回 (desc, sound, music) 与缺失标记。"""
+    """提取 H3 字段：三段式取 integrated_multimodal_description；六段式取 detailed_description。
+    返回 (desc, sound, music) 与缺失标记。"""
     p = str(prompt or "").strip()
-    m_desc = re.search(r"integrated_multimodal_description:\s*(.+?)(?=\n?\s*overall_soundscape:|\n?\s*non_diegetic_music:|\Z)", p, re.S)
+    m_desc = re.search(r"(?:integrated_multimodal_description|detailed_description):\s*(.+?)(?=\n?\s*overall_soundscape:|\n?\s*non_diegetic_music:|\Z)", p, re.S)
     m_snd = re.search(r"overall_soundscape:\s*(.+?)(?=\n?\s*non_diegetic_music:|\Z)", p, re.S)
     m_mus = re.search(r"non_diegetic_music:\s*(.+?)(?=\Z)", p, re.S)
     return (
@@ -846,8 +853,9 @@ def enhance_prompt(prompt, task=None):
     has_align = "目标视频" in p or "For the target video" in p or "<Picture 1>" in p or "subject_definitions" in p
     desc, snd, mus = _extract_fields(p)
 
-    # 1. 对齐指令
-    if mode in ("i2v", "r2v") and not has_align and refs:
+    # 1. 对齐指令：I2V 首帧对齐；R2V 不再注入"Picture 1 首帧"（改由六段式
+    #    subject_definitions + keyframe 声明负责，见 to_ref2va_six_section）
+    if mode == "i2v" and not has_align and refs:
         header = (
             "目标视频的第 0.00 秒完全参照 <Picture 1>（来自 [Shot 1]）。\n\n"
         )
@@ -906,8 +914,9 @@ def enhance_prompt(prompt, task=None):
             break
 
     # 6b. 分镜图构图引用：参考图里有分镜图时，明确其构图/机位/人物站位基准作用
+    #     （仅非 R2V 模式注入；R2V 由六段式 <Picture N> 故事板声明负责）
     for idx, img in enumerate(refs):
-        if str(img).startswith("分镜_") or str(img).startswith("story_"):
+        if mode != "r2v" and (str(img).startswith("分镜_") or str(img).startswith("story_")):
             pic = idx + 1
             comp = (
                 f" 本镜构图、机位、景别、人物站位与画面内容严格参照 <Picture {pic}>（分镜图）；"
@@ -1006,9 +1015,41 @@ def extract_last_frame(video_path):
 
 
 def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None):
+    warnings = []
+    # R2V 任务：三段式 → 官方六段式（仅本次会直接提交的段；链式等待段保持三段式，
+    # 后续由 advance_chain 转 I2V 使用）
+    for idx, t in enumerate(tasks):
+        if t.get("mode") == "r2v" and (t.get("images") or []):
+            is_waiting = bool(t.get("chain_waiting")) or (bool(chain_mode) and idx > 0)
+            if not is_waiting:
+                t["prompt"] = to_ref2va_six_section(t.get("prompt", ""), t)
+    # R2V 模型预检：ref2va 权重缺失时回退 fl2va_pruned 并提示
+    r2v_cfg = (_CONFIG.get("models") or {}).get("r2v") or {}
+    want_unet = r2v_cfg.get("unet") or "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
+    want_clip = r2v_cfg.get("clip") or "qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors"
+    if any(t.get("mode") == "r2v" and not (
+        bool(t.get("chain_waiting")) or (bool(chain_mode) and i > 0)
+    ) for i, t in enumerate(tasks)):
+        unets, clips = _server_models(server)
+        use_unet, use_clip = want_unet, want_clip
+        if unets:
+            if want_unet not in unets:
+                use_unet = "minimax_h3_fl2va_pruned_int8_convrot.safetensors" if "minimax_h3_fl2va_pruned_int8_convrot.safetensors" in unets else unets[0]
+                warnings.append(
+                    f"⚠️ 服务器模型列表里没有 {want_unet}，R2V 暂回退 {use_unet}（身份锁定弱）。"
+                    "文件放对位置后重启 ComfyUI 即可生效。"
+                )
+        if clips:
+            if want_clip not in clips:
+                use_clip = clips[0]
+                warnings.append(f"⚠️ 缺少 CLIP {want_clip}，R2V 暂用 {use_clip}。")
+        for t in tasks:
+            if t.get("mode") == "r2v":
+                t["r2v_unet"] = use_unet
+                t["r2v_clip"] = use_clip
     graphs, err = build_graphs(tasks)
     if err:
-        return None, err
+        return None, err, warnings
     # I2V 任务先上传首帧图
     for task, _ in graphs:
         if task.get("chain_waiting"):
@@ -1019,18 +1060,18 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
                 try:
                     upload_image(server, lp, task["image"])
                 except Exception as e:
-                    return None, f"上传首帧图 {task['image']} 失败：{e}"
+                    return None, f"上传首帧图 {task['image']} 失败：{e}", warnings
             else:
-                return None, f"本地找不到首帧图：{task['image']}"
+                return None, f"本地找不到首帧图：{task['image']}", warnings
         if task["mode"] == "r2v":
             for img in (task.get("images") or []):
                 lp = find_image(img)
                 if not lp:
-                    return None, f"本地找不到参考图：{img}"
+                    return None, f"本地找不到参考图：{img}", warnings
                 try:
                     upload_image(server, lp, img)
                 except Exception as e:
-                    return None, f"上传参考图 {img} 失败：{e}"
+                    return None, f"上传参考图 {img} 失败：{e}", warnings
 
     state = load_state()
     state["server"] = server
@@ -1112,7 +1153,35 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
         })
         results.append({"id": tid, "ok": True, "prompt_id": pid, "waiting": is_chain_waiting})
     save_state(state)
-    return results, None
+    return results, None, warnings
+
+
+# 远程模型列表缓存（ComfyUI object_info，120 秒 TTL）
+_MODEL_CACHE = {"t": 0.0, "unets": [], "clips": []}
+
+
+def _server_models(server):
+    """查远程 UNETLoader/CLIPLoader 可用模型名列表（失败返回空列表）。"""
+    now = time.time()
+    if now - _MODEL_CACHE["t"] < 120 and _MODEL_CACHE["unets"]:
+        return _MODEL_CACHE["unets"], _MODEL_CACHE["clips"]
+    unets, clips = [], []
+    try:
+        req = urllib.request.Request(server + "/object_info/UNETLoader", headers={"User-Agent": "batch-console"})
+        with _opener().open(req, timeout=15) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        unets = (d.get("UNETLoader", {}).get("input", {}).get("required", {}).get("unet_name") or [[]])[0]
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(server + "/object_info/CLIPLoader", headers={"User-Agent": "batch-console"})
+        with _opener().open(req, timeout=15) as r:
+            d = json.loads(r.read().decode("utf-8"))
+        clips = (d.get("CLIPLoader", {}).get("input", {}).get("required", {}).get("clip_name") or [[]])[0]
+    except Exception:
+        pass
+    _MODEL_CACHE.update({"t": now, "unets": unets, "clips": clips})
+    return unets, clips
 
 
 # ---------- 状态查询 / 下载 / 记录 ----------
@@ -2753,11 +2822,33 @@ def verify_asset(image_path, kind, expected=None, timeout=120):
         hair = expected.get("hair") or ""
         costume = expected.get("costume") or ""
         check_look = "；".join(x for x in [hair, costume] if x) or look
-        q = (f"你是图片质检员。检查这张角色锚点图，严格只输出 JSON：{{\"ok\": true或false, \"issues\": [\"问题1\", ...]}}\n"
-             f"检查项：1. 人物性别必须是「{gender}」 2. 发型服装必须与设定一字不差一致：{check_look} "
-             f"3. 画面干净：无多余肢体/多余手指、无重复人物、无文字乱码、无现代物品 4. 面部清晰五官正常。\n"
-             f"若发型或服装与设定不符，必须列为问题（如'服装与设定不符：应为碎花连衣裙，实际是…'）。\n"
-             "ok=true 表示全部通过；否则 ok=false 并列出具体问题。")
+        view = expected.get("view")
+        if view == "side":
+            q = (f"你是图片质检员。检查这张角色侧面参考图（90度正侧面），严格只输出 JSON："
+                 f"{{\"ok\": true或false, \"issues\": [\"问题1\", ...]}}\n"
+                 f"检查项：1. 人物侧面轮廓、发型、服装必须与设定一致：{check_look} "
+                 f"2. 侧面视角正常（人物侧身站立，面部朝向画面侧面，不要求正脸） "
+                 f"3. 画面干净：无多余肢体/多余手指、无重复人物、无文字乱码、无现代物品。\n"
+                 "ok=true 表示全部通过；否则 ok=false 并列出具体问题。")
+        elif view == "back":
+            q = (f"你是图片质检员。检查这张角色背面参考图，严格只输出 JSON："
+                 f"{{\"ok\": true或false, \"issues\": [\"问题1\", ...]}}\n"
+                 f"检查项：1. 背面视角正常（人物背对镜头，看不到正脸属正常） "
+                 f"2. 发型与服装必须与设定一致：{check_look} "
+                 f"3. 画面干净：无多余肢体/多余手指、无重复人物、无文字乱码、无现代物品。\n"
+                 "ok=true 表示全部通过；否则 ok=false 并列出具体问题。")
+        elif view == "face":
+            q = (f"你是图片质检员。检查这张角色脸部特写参考图，严格只输出 JSON："
+                 f"{{\"ok\": true或false, \"issues\": [\"问题1\", ...]}}\n"
+                 f"检查项：1. 五官清晰、面部占画面主体 2. 发型与设定一致：{hair or check_look} "
+                 f"3. 人物性别必须是「{gender}」 4. 画面干净：无多余肢体/手指、无重复人物、无文字乱码。\n"
+                 "ok=true 表示全部通过；否则 ok=false 并列出具体问题。")
+        else:
+            q = (f"你是图片质检员。检查这张角色锚点图，严格只输出 JSON：{{\"ok\": true或false, \"issues\": [\"问题1\", ...]}}\n"
+                 f"检查项：1. 人物性别必须是「{gender}」 2. 发型服装必须与设定一字不差一致：{check_look} "
+                 f"3. 画面干净：无多余肢体/多余手指、无重复人物、无文字乱码、无现代物品 4. 面部清晰五官正常。\n"
+                 f"若发型或服装与设定不符，必须列为问题（如'服装与设定不符：应为碎花连衣裙，实际是…'）。\n"
+                 "ok=true 表示全部通过；否则 ok=false 并列出具体问题。")
     elif kind == "scene":
         desc = expected.get("desc") or ""
         desc_line = f"1. 场景必须与描述一致：{desc}" if desc else "1. 场景符合「1980年代中国乡村环境」"
@@ -2863,6 +2954,7 @@ def _asset_state_block():
         costume = str(r.get("costume") or "").strip()
         hair = str(r.get("hair") or "").strip()
         ref = str(r.get("reference") or "").strip()
+        views = r.get("views") or {}
         bits = []
         if identity:
             bits.append(f"身份：{identity}")
@@ -2874,6 +2966,15 @@ def _asset_state_block():
             bits.append(
                 f"参考图：{os.path.basename(ref)}（只继承身份/发型/服装，"
                 "排除原图姿势/构图/背景/光线/调色）"
+            )
+        view_names = []
+        for v in ("front", "face", "side", "back"):
+            if views.get(v):
+                view_names.append({"front": "正面", "face": "脸部特写", "side": "侧面", "back": "背面"}[v])
+        if view_names:
+            bits.append(
+                f"多视图：{'、'.join(view_names)}（{len(view_names)} 个视角均为同一人物，"
+                "锁定同一身份/发型/服装）"
             )
         if bits:
             lines.append(f"- {name}：{'；'.join(bits)}")
@@ -2896,6 +2997,177 @@ def _asset_state_block():
         "【角色/场景资产状态：必须一字不差引用，不得自行改写服装、发型与身份】\n"
         + "\n".join(lines)
     )
+
+
+_VIEW_ZH = {"front": "正面", "face": "脸部特写", "side": "侧面", "back": "背面"}
+
+
+def _split_three_fields(prompt):
+    """拆三段式 → (body, sound, music)。"""
+    p = str(prompt or "").strip()
+    m_desc = re.search(
+        r"(?:integrated_multimodal_description|detailed_description):\s*(.+?)(?=\n?\s*overall_soundscape:|\n?\s*non_diegetic_music:|\Z)",
+        p, re.S,
+    )
+    m_snd = re.search(r"overall_soundscape:\s*(.+?)(?=\n?\s*non_diegetic_music:|\Z)", p, re.S)
+    m_mus = re.search(r"non_diegetic_music:\s*(.+?)(?=\Z)", p, re.S)
+    return (
+        m_desc.group(1).strip() if m_desc else "",
+        m_snd.group(1).strip() if m_snd else "",
+        m_mus.group(1).strip() if m_mus else "",
+    )
+
+
+def to_ref2va_six_section(prompt, task=None):
+    """三段式 → 官方 Ref2VA 六段式（中文正文 + 英文字段名/标签）。
+
+    图片编号 = 提交时 task['images'] 的顺序（前端已按 角色多视图 → 场景图 → 分镜图 排好）。
+    subject_definitions 把角色/场景映射到 <Subject N> 与 <Picture N>，分镜图声明为
+    故事板参考（不锁定首帧），链帧（如出现在 R2V 中）声明为 keyframe completion。
+    """
+    task = task or {}
+    p = str(prompt or "").strip()
+    if not p:
+        return p
+    if "subject_definitions:" in p:
+        return p  # 已是六段式
+    body, sound, music = _split_three_fields(p)
+    if not body:
+        return p
+    st = load_state()
+    proj = st.get("project") or {}
+    ast = proj.get("asset_state") or {}
+    role_state = ast.get("roles") or {}
+    scene_state = ast.get("scenes") or {}
+    images = [x for x in (task.get("images") or []) if x]
+    pic_of = {img: i + 1 for i, img in enumerate(images)}
+    seg_roles = [str(x) for x in (task.get("roles") or []) if x]
+    seg_scene = str(task.get("scene") or "").strip()
+    story_img = str(task.get("story_image") or "").strip()
+
+    # 每个角色的参考图（reference 兜底 + 多视图）
+    role_refs = {}
+    for name, s in role_state.items():
+        refs = []
+        if s.get("reference"):
+            refs.append(str(s["reference"]))
+        for v in ("front", "face", "side", "back"):
+            vp = (s.get("views") or {}).get(v)
+            if vp:
+                refs.append(str(vp))
+        role_refs[name] = list(dict.fromkeys(x for x in refs if x))
+
+    subject_lines = []
+    pic_lines = []
+    retention_lines = []
+    subject_of = {}   # role name -> <Subject N>
+    scene_subject = None
+    n = 0
+
+    for name in seg_roles:
+        refs = role_refs.get(name) or []
+        pics = [pic_of[r] for r in refs if r in pic_of]
+        if not pics:
+            continue
+        n += 1
+        subject_of[name] = n
+        s = role_state.get(name) or {}
+        desc_bits = []
+        if s.get("identity"):
+            desc_bits.append(f"身份：{s['identity']}")
+        if s.get("hair"):
+            desc_bits.append(f"发型：{s['hair']}")
+        if s.get("costume"):
+            desc_bits.append(f"服装：{s['costume']}")
+        views = []
+        for v in ("front", "face", "side", "back"):
+            vp = (s.get("views") or {}).get(v)
+            if vp and vp in pic_of:
+                views.append(_VIEW_ZH[v])
+        view_txt = ("，" + "、".join(views) + " 多视角") if views else ""
+        pic_txt = "、".join(f"<Picture {x}>" for x in pics)
+        subject_lines.append(
+            f"<Subject {n}> 是角色「{name}」（{'；'.join(desc_bits) or '身份未填'}），"
+            f"其外貌来自 {pic_txt}{view_txt}。"
+            "参考图只继承人物身份、发型、服装，排除原图姿势、构图、背景、光线与调色。"
+        )
+        retention_lines.append(
+            f"<Subject {n}> (appears in [Shot 1]): fully_preserved - "
+            f"「{name}」的身份、发型、服装完整保留，仅按剧情做动作与表情变化。"
+        )
+
+    if seg_scene and scene_state.get(seg_scene):
+        ref = str(scene_state[seg_scene].get("reference") or "").strip()
+        if ref in pic_of:
+            n += 1
+            scene_subject = n
+            s = scene_state[seg_scene]
+            desc = str(s.get("desc") or "").strip() or "空间布局与氛围"
+            subject_lines.append(
+                f"<Subject {n}> 是「{seg_scene}」环境（{desc}），来自 <Picture {pic_of[ref]}>。"
+                "只继承空间布局、陈设与氛围，排除原图构图、机位与光线。"
+            )
+            retention_lines.append(
+                f"<Subject {n}> (appears in [Shot 1]): fully_preserved - "
+                f"「{seg_scene}」环境的空间布局与氛围完整保留。"
+            )
+
+    if story_img and story_img in pic_of:
+        pic_lines.append(
+            f"<Picture {pic_of[story_img]}> 是本段故事板参考图，定义机位、景别、构图与人物站位，"
+            "不作为首帧锁定。"
+        )
+        retention_lines.append(
+            f"<Picture {pic_of[story_img]}> (storyboard): weak_reference - "
+            "仅参考其构图、机位与人物站位，不复制其静态画面。"
+        )
+
+    for ci in images:
+        if str(ci).startswith("chain_") and ci in pic_of:
+            pic_lines.append(
+                f"<Picture {pic_of[ci]}> 是上一段末帧，作为本视频第 0.00 秒的首帧"
+                "（keyframe completion），本段从该帧的场景、人物位置与光线无缝延续。"
+            )
+            retention_lines.append(
+                f"<Picture {pic_of[ci]}> (first frame): fully_preserved - "
+                "作为本段首帧完整保留其场景、人物位置与光线。"
+            )
+
+    if not subject_lines and not pic_lines:
+        return p  # 没有可定义的参考，保持三段式
+
+    # summary
+    task_types = ["reference generation"]
+    if any(str(x).startswith("chain_") and x in pic_of for x in images):
+        task_types.append("keyframe completion")
+    subjects_txt = "、".join(
+        f"<Subject {subject_of[nm]}>（{nm}）" for nm in seg_roles if nm in subject_of
+    )
+    if scene_subject:
+        subjects_txt += (("、" if subjects_txt else "") + f"<Subject {scene_subject}>（{seg_scene}环境）")
+    action_txt = str(task.get("name") or "本段剧情")
+    summary = (
+        f"[{' + '.join(task_types)}] 本段（{action_txt}）展示 "
+        f"{subjects_txt or '主体内容'}；人物身份与场景布局分别由对应参考图锁定，"
+        "构图按故事板参考图规划，声音与画面同步生成。"
+    )
+
+    # detailed_description：首次出现角色名时插入 <Subject N> 标签（正文保持中文可读）
+    marked = body
+    for name, sid in subject_of.items():
+        idx = marked.find(name)
+        if idx >= 0:
+            marked = marked[:idx] + f"<Subject {sid}>（{name}）" + marked[idx + len(name):]
+
+    sections = ["subject_definitions:\n" + "\n".join(subject_lines + pic_lines)]
+    sections.append("summary:\n" + summary)
+    sections.append("retention_analysis:\n" + "\n".join(retention_lines))
+    sections.append("detailed_description:\n" + marked)
+    if sound:
+        sections.append("overall_soundscape:\n" + sound)
+    if music:
+        sections.append("non_diegetic_music:\n" + music)
+    return "\n\n".join(sections)
 
 
 def llm_expand_one(sb, role_map, token="", prev_prompt=""):
@@ -2997,12 +3269,12 @@ def start_expand_job(text, token=""):
 
 
 def _is_full_prompt(p):
-    """判定一段提示词是否为完整 AI 扩写（>600 字且三段式齐全）。
+    """判定一段提示词是否为完整 AI 扩写（>600 字且三段式/六段式齐全）。
     规则回退模板约 400-470 字，AI 完整版一般 700+ 字。"""
     p = str(p or "")
     return (
         len(p) > 600
-        and "integrated_multimodal_description" in p
+        and ("integrated_multimodal_description" in p or "detailed_description" in p)
         and "overall_soundscape" in p
         and "non_diegetic_music" in p
     )
@@ -3731,7 +4003,7 @@ class Handler(BaseHTTPRequestHandler):
             if not tasks:
                 self._send(400, json.dumps({"error": "没有任务"}, ensure_ascii=False))
                 return
-            results, err = submit_tasks(server, tasks, auto, chain, role_images, scene_image)
+            results, err, warnings = submit_tasks(server, tasks, auto, chain, role_images, scene_image)
             if err:
                 self._send(400, json.dumps({"error": err}, ensure_ascii=False))
             else:
@@ -3774,7 +4046,7 @@ class Handler(BaseHTTPRequestHandler):
                         save_state(st)
                 except Exception:
                     pass
-                self._send(200, json.dumps({"results": results}, ensure_ascii=False))
+                self._send(200, json.dumps({"results": results, "warnings": warnings}, ensure_ascii=False))
             return
         if path == "/api/import":
             fmt = body.get("format", "csv")

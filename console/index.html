@@ -568,6 +568,16 @@
         <input type="text" id="imgLocalUrl" placeholder="http://127.0.0.1:8081">
       </label>
     </div>
+    <div class="cfg-block">
+      <div class="cfg-title">🎬 R2V（Ref2VA）模型（参考图出片）</div>
+      <label class="field">UNET 权重（models/diffusion_models 下的文件名）
+        <input type="text" id="r2vUnet" placeholder="minimax_h3_ref2va_pruned_int8_convrot.safetensors">
+      </label>
+      <label class="field">CLIP 文本编码器（models/text_encoders 下的文件名）
+        <input type="text" id="r2vClip" placeholder="qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors">
+      </label>
+      <div class="hint">提交 R2V 时自动检测服务器上的权重，缺失则回退 FL2VA 并提示。</div>
+    </div>
     <label class="field">LM Studio API Token（AI 扩写/生成用，留空用已保存）
       <input type="password" id="lmToken" placeholder="sk-lm-...">
     </label>
@@ -1097,6 +1107,7 @@ function scriptToTasks(script) {
   return sb.map((s, i) => ({
     name: `${script.title || '剧本'}_${String(i+1).padStart(2,'0')}`,
     mode: 't2v', duration: s.duration || 10, mp: 1.0, image: '', images: [],
+    roles: s.roles || [], scene: s.scene || '',
     story_image: assetImgs.story[i] || '',
     ref_video: $('refVideo') ? ($('refVideo').value || null) : null,
     scene_image: $('sceneImage').value || null, no_bgm: true,
@@ -1311,22 +1322,30 @@ function renderPreview() {
   }).join('');
 }
 
+const MAX_REF_IMAGES = 8;  // 与 config.json console.max_ref_images 对齐（官方 Ref2VA 上限 9）
+
 function effectiveRefs(i) {
-  // 提交时实际参考图：分镜图放第一位（Picture 1 = 首帧对齐 + 构图基准），
-  // 角色锚点图保身份、场景图保环境；下拉框手动选择只作补充
+  // 提交时实际参考图（官方 Ref2VA 语义）：
+  // 顺序 = 本段出场角色多视图（正→脸→侧→背）→ 场景图 → 分镜图（故事板，非首帧）→ 手动补充。
+  // 分镜图不再当首帧；链式段（第 2 段起）走 I2V，只带上段末帧。
   const roles = (currentScript && currentScript.role_list) || [];
+  const sb = (currentScript && currentScript.storyboard_list) || [];
+  const seg = sb[i] || {};
+  const segRoles = new Set((seg.roles || []).map(String));
   const refs = [];
-  if (assetImgs.story[i]) refs.push(assetImgs.story[i]);
-  roles.slice(0, 2).forEach(r => {
+  const push = (p) => { if (p && !refs.includes(p)) refs.push(p); };
+  roles.forEach(r => {
     const n = r.role_name || r.name;
-    if (assetImgs.role[n]) refs.push(assetImgs.role[n]);
+    if (!n) return;
+    if (segRoles.size && !segRoles.has(n)) return;  // 只带本段出场角色
+    const views = ((assetImgs.roleViews && assetImgs.roleViews[n]) || {});
+    ['front', 'face', 'side', 'back'].forEach(v => { if (views[v]) push(views[v]); });
+    if (!views.front && assetImgs.role[n]) push(assetImgs.role[n]);  // 旧项目兜底
   });
-  const scene = ((currentScript && currentScript.storyboard_list) || [])[i] || {};
-  if (scene.scene && assetImgs.scene[scene.scene]) refs.push(assetImgs.scene[scene.scene]);
-  [$('roleImage1').value, $('roleImage2').value, $('sceneImage').value].forEach(v => {
-    if (v && !refs.includes(v)) refs.push(v);
-  });
-  return [...new Set(refs)].slice(0, 4);
+  if (seg.scene && assetImgs.scene[seg.scene]) push(assetImgs.scene[seg.scene]);
+  if (assetImgs.story[i]) push(assetImgs.story[i]);
+  [$('roleImage1').value, $('roleImage2').value, $('sceneImage').value].forEach(v => { if (v) push(v); });
+  return refs.slice(0, MAX_REF_IMAGES);
 }
 
 // ---------- ⑦ 提交 / 状态 ----------
@@ -1349,7 +1368,7 @@ async function submit() {
     t.ref_video = $('refVideo').value || null;
     t.quality = $('qualityMode').checked ? 'final' : 'preview';
     t.steps = parseInt($('stepsMode').value) || undefined;
-    if (refs.length) { t.mode = 'r2v'; t.images = refs.slice(0, 4); t.image = ''; }
+    if (refs.length) { t.mode = 'r2v'; t.images = refs.slice(0, MAX_REF_IMAGES); t.image = ''; }
     else { t.mode = 't2v'; t.image = ''; t.images = []; }
     return t;
   });
@@ -1378,6 +1397,7 @@ async function submit() {
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error || '提交失败', true); return; }
+    if (d.warnings && d.warnings.length) d.warnings.forEach(w => toast(w));
     const okN = d.results.filter(x => x.ok).length;
     const bad = d.results.filter(x => !x.ok);
     toast(`提交成功 ${okN}/${d.results.length}` + (bad.length ? `；跳过 ${bad.length}（${bad[0].error}）` : ''));
@@ -1885,6 +1905,9 @@ async function loadConfigIntoForm() {
       if (img.cloud.model) $('imgCloudModel').value = img.cloud.model;
       if (img.cloud.api_key) $('imgCloudKey').value = img.cloud.api_key;
     }
+    const r2v = (c.models && c.models.r2v) || {};
+    if (r2v.unet) $('r2vUnet').value = r2v.unet;
+    if (r2v.clip) $('r2vClip').value = r2v.clip;
     toggleCfgBoxes();
   } catch (e) {}
 }
@@ -1917,6 +1940,11 @@ async function saveConfig() {
         api_key: $('imgCloudKey').value.trim(),
         model: $('imgCloudModel').value.trim(),
       },
+    };
+    cfg.models = cfg.models || {};
+    cfg.models.r2v = {
+      unet: $('r2vUnet').value.trim() || 'minimax_h3_ref2va_pruned_int8_convrot.safetensors',
+      clip: $('r2vClip').value.trim() || 'qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors',
     };
     const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({config: cfg})});
     const d = await r.json();
@@ -2087,6 +2115,18 @@ function renderAssets() {
   $('roleAssets').innerHTML = roles.map((r, i) => {
     const name = r.role_name || r.name || '角色' + (i + 1);
     const img = assetImgs.role[name] || '';
+    const views = ((assetImgs.roleViews && assetImgs.roleViews[name]) || {});
+    const viewMeta = {front: ['正面', '🖼️'], face: ['脸部', '👤'], side: ['侧面', '↔️'], back: ['背面', '⬅️']};
+    const viewGrid = ['front', 'face', 'side', 'back'].map(v => {
+      const f = views[v] || '';
+      return `<div style="flex:1;min-width:0;text-align:center">
+        <div style="width:100%;aspect-ratio:3/4;border-radius:6px;overflow:hidden;border:1px solid var(--line);background:#f1f4f9">
+          ${f ? `<img src="/media/${encodeURIComponent(f)}" style="width:100%;height:100%;object-fit:cover">` : ''}
+        </div>
+        <button class="btn rv-btn" data-i="${i}" data-view="${v}" onclick="genRoleView(${i},'${v}')"
+          style="width:100%;font-size:11px;padding:3px 2px;margin-top:3px">${viewMeta[v][1]} ${f ? '重生成' : viewMeta[v][0]}</button>
+      </div>`;
+    }).join('');
     const gSel = (assetImgs.roleGender && assetImgs.roleGender[name]) || inferGender(r.role_desc || '');
     const genderOpts = ['女', '男', '未知'].map(g =>
       `<option value="${g}" ${gSel === g ? 'selected' : ''}>${g}</option>`).join('');
@@ -2097,11 +2137,13 @@ function renderAssets() {
       </div>
       <div class="meta">${esc(r.role_desc || '')}</div>
       <img src="${img ? '/media/' + encodeURIComponent(img) : ''}" style="width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:#f1f4f9;display:${img ? 'block':'none'}">
+      <div style="display:flex;gap:4px;margin-top:6px">${viewGrid}</div>
       <details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">📝 提示词（可编辑）</summary>
         <textarea class="asset-prompt" data-kind="role" data-key="${esc(name)}" rows="4" style="width:100%;font-size:11px;margin-top:6px">${esc(prompt)}</textarea>
       </details>
       <div class="row" style="margin-top:8px">
         <button class="btn" onclick="genRoleImg(${i})">${img ? '🔄 重新生成' : '🖼️ 生成锚点图'}</button>
+        <button class="btn" onclick="genRoleFourViews(${i})">🧩 四视图</button>
         <button class="btn" onclick="openPromptModal('role', ${i})">💬 对话修改</button>
         <button class="btn" onclick="setRoleRef(${i})" ${img ? '' : 'disabled'}>设为参考图 ${i + 1}</button>
       </div>
@@ -2183,12 +2225,15 @@ function renderAssetState() {
     const n = r.role_name || r.name;
     const s = assetState.roles[n] || {};
     const ref = assetImgs.role[n] || s.reference || '';
+    const views = ((assetImgs.roleViews && assetImgs.roleViews[n]) || {});
+    const vFiles = [views.front || ref, views.face, views.side, views.back].filter(Boolean);
+    const thumb = (f) => f ? `<img src="/media/${encodeURIComponent(f)}" style="width:22px;height:30px;object-fit:cover;border-radius:3px;border:1px solid var(--line)" title="${esc(String(f).split('/').pop())}">` : '';
     return `<div class="ast-row">
       <div class="ast-name" title="${esc(n)}">${esc(n)}</div>
       <input class="ast-in" data-kind="roles" data-key="${escAttr(n)}" data-field="identity" placeholder="身份不变量（脸型/体型）" value="${esc(s.identity || '')}">
       <input class="ast-in" data-kind="roles" data-key="${escAttr(n)}" data-field="hair" placeholder="发型" value="${esc(s.hair || '')}">
       <input class="ast-in" data-kind="roles" data-key="${escAttr(n)}" data-field="costume" placeholder="服装（与剧本描述一字不差）" value="${esc(s.costume || '')}">
-      <span class="ast-ref" title="${esc(ref)}">${ref ? esc(String(ref).split('/').pop()) : '未生成锚点图'}</span>
+      <span class="ast-ref" title="${esc(vFiles.join(' | '))}" style="display:flex;gap:2px">${vFiles.length ? vFiles.map(thumb).join('') : '未生成锚点图'}</span>
       <label class="ast-ok"><input type="checkbox" data-kind="roles" data-key="${escAttr(n)}" data-field="approved" ${s.approved ? 'checked' : ''}> 批准</label>
     </div>`;
   }).join('');
@@ -2231,7 +2276,8 @@ function verifyBadge(kind, key) {
   return `<span class="pill error" title="${esc(tip)}">⚠️ ${esc(issue.slice(0, 18))}</span>`;
 }
 
-async function genAsset(kind, key, prompt, label) {
+async function genAsset(kind, key, prompt, label, opts) {
+  opts = opts || {};
   const tag = label || kind;
   const fn = `${tag}_${String(key).replace(/[\\/:*?"<>|]/g, '').slice(0, 20)}_${Date.now().toString(36)}.png`;
   // 角色/分镜质检期望（性别、形象），场景不查人物
@@ -2245,6 +2291,7 @@ async function genAsset(kind, key, prompt, label) {
       costume: st.costume || '',
       look: [st.hair, st.costume].filter(Boolean).join('，') || prompt.slice(0, 120),
     };
+    if (opts.view) expected.view = opts.view;
   } else if (kind === 'scene') {
     const st = (assetState.scenes && assetState.scenes[key]) || {};
     expected = {desc: st.desc || prompt.slice(0, 140)};
@@ -2321,13 +2368,81 @@ async function genRoleImg(i) {
   toastLoading(`🖼️ 正在生成「${name}」锚点图（约 10-30 秒）…`);
   try {
     assetImgs.role[name] = await genAsset('role', name, prompt, '锚点');
+    assetImgs.roleViews = assetImgs.roleViews || {};
+    assetImgs.roleViews[name] = assetImgs.roleViews[name] || {};
+    assetImgs.roleViews[name].front = assetImgs.role[name];
     assetState.roles[name] = assetState.roles[name] || {};
     assetState.roles[name].reference = assetImgs.role[name];
+    assetState.roles[name].views = assetState.roles[name].views || {};
+    assetState.roles[name].views.front = assetImgs.role[name];
     renderAssets();
     autoSaveProject(true);
     toast(`✅ 「${name}」锚点图已生成，可设为参考图`);
   } catch (e) { toast(e.message, true); }
   finally { btn.disabled = false; btn.textContent = '🖼️ 生成锚点图'; }
+}
+
+function roleViewPrompt(r, gender, view) {
+  const name = r.role_name || r.name;
+  const st = (assetState.roles && assetState.roles[name]) || {};
+  const gText = {女: '年轻女性', 男: '年轻男性', 未知: ''}[gender] || '';
+  const same = `同一人物「${name}」，身份${st.identity || '与正面锚点图相同'}、发型${st.hair || '一致'}、服装${st.costume || '一致'}，与正面锚点图完全同一人，不得改变五官、发型与服装`;
+  const neg = '单一人像，无其他人物，无多余肢体/手指，无重复人物，无文字乱码，无现代物品，1980年代中国乡村风格，胶片质感，写实摄影';
+  if (view === 'face') {
+    return `${gText}，1980年代中国${r.role_desc || '乡村人物'}。脸部特写肖像，面部占满画面，五官清晰，双眼有神，${same}。${neg}`;
+  }
+  if (view === 'side') {
+    return `${gText}，1980年代中国${r.role_desc || '乡村人物'}。全身侧面照，90度正侧面视角，站立姿态自然，${same}。${neg}`;
+  }
+  if (view === 'back') {
+    return `${gText}，1980年代中国${r.role_desc || '乡村人物'}。全身背面照，人物背对镜头，完整展现背影、背面发型与服装，${same}。${neg}`;
+  }
+  return defaultRolePrompt(r, gender);
+}
+
+async function genRoleView(i, view) {
+  const r = (currentScript.role_list || [])[i];
+  if (!r) return;
+  const name = r.role_name || r.name;
+  const gender = (assetImgs.roleGender && assetImgs.roleGender[name]) || inferGender(r.role_desc || '');
+  const prompt = roleViewPrompt(r, gender, view);
+  assetPrompts.role[name] = assetPrompts.role[name] || defaultRolePrompt(r, gender);
+  const btn = document.querySelector(`.rv-btn[data-i="${i}"][data-view="${view}"]`);
+  if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+  const vLabel = {front: '正面', face: '脸部', side: '侧面', back: '背面'}[view];
+  toastLoading(`🖼️ 正在生成「${name}」${vLabel}图（约 10-30 秒）…`);
+  try {
+    const fn = await genAsset('role', `${name}_${view}`, prompt, '锚点', {view});
+    assetImgs.roleViews = assetImgs.roleViews || {};
+    assetImgs.roleViews[name] = assetImgs.roleViews[name] || {};
+    assetImgs.roleViews[name][view] = fn;
+    assetState.roles[name] = assetState.roles[name] || {};
+    assetState.roles[name].views = assetState.roles[name].views || {};
+    assetState.roles[name].views[view] = fn;
+    if (view === 'front') {
+      assetImgs.role[name] = fn;
+      assetState.roles[name].reference = fn;
+    }
+    renderAssets();
+    autoSaveProject(true);
+    toast(`✅ 「${name}」${vLabel}图已生成`);
+  } catch (e) { toast(e.message, true); }
+  finally { if (btn) { btn.disabled = false; btn.textContent = {front: '🖼️ 正面', face: '👤 脸部', side: '↔️ 侧面', back: '⬅️ 背面'}[view]; } }
+}
+
+async function genRoleFourViews(i) {
+  const r = (currentScript.role_list || [])[i];
+  if (!r) return;
+  const name = r.role_name || r.name;
+  assetImgs.roleViews = assetImgs.roleViews || {};
+  assetImgs.roleViews[name] = assetImgs.roleViews[name] || {};
+  const missing = ['front', 'face', 'side', 'back'].filter(v => !assetImgs.roleViews[name][v]);
+  if (!missing.length) { toast(`✅ 「${name}」四视图已齐全`); return; }
+  toastLoading(`🧩 正在补齐「${name}」四视图（${missing.length} 张，每张约 10-30 秒）…`);
+  for (const v of missing) {
+    await genRoleView(i, v);
+  }
+  toast(`✅ 「${name}」四视图生成完成`);
 }
 
 async function genSceneImg(i) {

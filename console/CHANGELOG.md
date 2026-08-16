@@ -5,6 +5,36 @@
 
 ---
 
+## 2026-08-16 · v0.13.0 — R2V 改官方 Ref2VA：六段式 + 独立权重 + 角色四视图
+
+### 本次更新内容
+
+- **R2V 提示词改官方六段式**（提交时自动包装）：
+  `subject_definitions / summary / retention_analysis / detailed_description /
+  overall_soundscape / non_diegetic_music`
+  - 角色/场景自动生成 `<Subject N>` 定义，映射到 `<Picture N>`（图片编号 = 提交连接顺序）
+  - 分镜图声明为故事板参考（weak_reference），**不再当首帧**
+  - 链帧若出现在 R2V 中声明为 keyframe completion（第 0.00 秒首帧）
+- **R2V 使用独立 Ref2VA 权重**：`models.r2v.unet` 默认
+  `minimax_h3_ref2va_pruned_int8_convrot.safetensors`，CLIP 默认无审查模型
+  - config.json / 设置抽屉均可配置（models.r2v.unet / clip）
+  - 提交时自动检测服务器上是否加载该权重；缺失则回退 FL2VA 并在界面提示
+- **参考图提交顺序修正**：本段出场角色多视图（正→脸→侧→背）→ 场景图 → 分镜图 → 手动补充，
+  上限 8 张（官方上限 9）
+- **角色四视图资产**：角色卡片新增 正面/脸部/侧面/背面 四个视图槽 + 「🧩 四视图」一键补齐；
+  资产状态表参考图列显示四视图缩略图；四视图全部绑定同一 `<Subject N>`
+- 侧面/背面/脸部特写有独立质检规则（侧/背面不强制正脸）
+- 链式段保持 I2V（上段末帧 → 本段首帧），不受本次 R2V 改造影响
+
+### 影响与注意事项
+
+- 服务器需加载 `minimax_h3_ref2va_pruned_int8_convrot.safetensors`（重启 ComfyUI 刷新模型列表）；
+  未加载前提交 R2V 会提示并回退 FL2VA
+- 需重启本控制台服务（batch_console.py / chain_daemon.py）后生效
+- 参考图每多一张都会拖慢采样，四视图建议只给主角配齐
+
+---
+
 ## 2026-08-15 · v0.11.12 — 重新生成"永久保存"选项（补充说明提示）
 
 ### 本次更新内容
