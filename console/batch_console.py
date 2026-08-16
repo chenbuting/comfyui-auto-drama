@@ -1373,9 +1373,22 @@ def get_status(server):
                     record_task(server, t, entry)
                     t["recorded"] = True
                     changed = True
+        # 服务器重启会清空 ComfyUI 内存里的 history：已完成且本地有产物的任务
+        # 一律按"完成"处理，绝不误标 F-LOST；丢失/超时标记只针对没有产物的任务
+        if item["status"] not in ("completed", "error") and (t.get("output_file") or t.get("downloaded")):
+            item["status"] = "completed"
+            if not item["outputs"]:
+                of = t.get("output_file") or {}
+                item["outputs"] = [{
+                    "kind": "videos",
+                    "filename": of.get("filename", ""),
+                    "subfolder": of.get("subfolder", ""),
+                    "type": of.get("type", "output"),
+                }]
+            item["downloaded"] = bool(t.get("downloaded"))
         # 超时检测：运行/排队超过上限，或既不在队列也不在 history（丢失/被取消）→ 标记失败
         t0 = t.get("submitted_at")
-        if t0 and item["status"] not in ("completed", "error"):
+        if t0 and item["status"] not in ("completed", "error") and not (t.get("output_file") or t.get("downloaded")):
             try:
                 started = time.mktime(time.strptime(t0, "%Y-%m-%d %H:%M:%S"))
                 if time.time() - started > estimate_timeout(t):
