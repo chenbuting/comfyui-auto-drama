@@ -3644,6 +3644,50 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_media(self, p, ctype):
+        """支持 HTTP Range 的媒体文件发送（视频必须，否则浏览器只能播开头几秒）。"""
+        size = os.path.getsize(p)
+        rng = self.headers.get("Range")
+        if rng:
+            m = re.match(r"bytes=(\d*)-(\d*)$", str(rng).strip())
+            if m:
+                s, e = m.group(1), m.group(2)
+                if s == "" and e == "":
+                    start, end = 0, size - 1
+                elif s == "":
+                    length = int(e)
+                    start = max(0, size - length)
+                    end = size - 1
+                else:
+                    start = int(s)
+                    end = int(e) if e else size - 1
+                    if end >= size:
+                        end = size - 1
+                if start > end or start >= size:
+                    self.send_response(416)
+                    self.send_header("Content-Range", f"bytes */{size}")
+                    self.end_headers()
+                    return
+                with open(p, "rb") as f:
+                    f.seek(start)
+                    data = f.read(end - start + 1)
+                self.send_response(206)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+        with open(p, "rb") as f:
+            data = f.read()
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
     def _read_json(self):
         length = int(self.headers.get("Content-Length") or 0)
         return json.loads(self.rfile.read(length).decode("utf-8"))
@@ -3787,9 +3831,12 @@ class Handler(BaseHTTPRequestHandler):
                         ctype = "image/webp"
                     elif fn.lower().endswith(".mp4"):
                         ctype = "video/mp4"
-                    with open(p, "rb") as f:
-                        data = f.read()
-                    self._send(200, data, ctype)
+                    if ctype.startswith("video/"):
+                        self._send_media(p, ctype)
+                    else:
+                        with open(p, "rb") as f:
+                            data = f.read()
+                        self._send(200, data, ctype)
                     return
             # 生成视频：递归查 outputs 目录
             if os.path.isdir(OUTPUTS_DIR):
@@ -3801,9 +3848,7 @@ class Handler(BaseHTTPRequestHandler):
                             ctype = "video/webm"
                         elif fn.lower().endswith(".mov"):
                             ctype = "video/quicktime"
-                        with open(p, "rb") as f:
-                            data = f.read()
-                        self._send(200, data, ctype)
+                        self._send_media(p, ctype)
                         return
             self._send(404, "not found", "text/plain; charset=utf-8")
             return
