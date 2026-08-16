@@ -347,6 +347,9 @@
         <button class="btn" id="btnReverifyAssets">🩺 补质检（已有图）</button>
         <button class="btn green" id="btnGenAllAssets">⚡ 一键生成全部参考图</button>
       </div>
+      <label style="font-size:12px;color:var(--muted);margin-top:6px;display:inline-block">
+        <input type="checkbox" id="genFourViews" checked> 角色四视图（正/脸/侧/背），取消则只生成正面锚点
+      </label>
       <div id="assetProgress" style="display:none;margin-top:8px">
         <div style="height:8px;background:#e2e8f0;border-radius:99px;overflow:hidden">
           <div id="assetBar" style="height:100%;width:0%;background:var(--blue);transition:width .4s"></div>
@@ -2283,10 +2286,12 @@ async function genAsset(kind, key, prompt, label, opts) {
   // 角色/分镜质检期望（性别、形象），场景不查人物
   let expected = {};
   if (kind === 'role') {
-    const r = (currentScript.role_list || []).find(x => (x.role_name || x.name) === key);
-    const st = (assetState.roles && assetState.roles[key]) || {};
+    // key 可能是「角色名」或「角色名_side/_back/_face」（四视图），统一按角色名解析
+    const baseKey = String(key).replace(/_(front|face|side|back)$/, '');
+    const r = (currentScript.role_list || []).find(x => (x.role_name || x.name) === baseKey);
+    const st = (assetState.roles && assetState.roles[baseKey]) || {};
     expected = {
-      gender: (assetImgs.roleGender && assetImgs.roleGender[key]) || inferGender((r && r.role_desc) || '') || '未知',
+      gender: (assetImgs.roleGender && assetImgs.roleGender[baseKey]) || inferGender((r && r.role_desc) || '') || '未知',
       hair: st.hair || '',
       costume: st.costume || '',
       look: [st.hair, st.costume].filter(Boolean).join('，') || prompt.slice(0, 120),
@@ -2584,7 +2589,45 @@ async function genAllAssets() {
   if (!currentScript) { toast('请先生成剧本', true); return; }
   const roles = (currentScript.role_list || []);
   const sb = (currentScript.storyboard_list || []);
-  const total = roles.length + sceneNames.length + sb.length;
+  const fourViews = $('genFourViews') ? $('genFourViews').checked : true;
+  const viewZh = {front: '正面', face: '脸部', side: '侧面', back: '背面'};
+  // 收集待生成清单（只生成缺失的，支持断点续跑）
+  const todo = [];
+  roles.forEach((r, i) => {
+    const name = r.role_name || r.name;
+    ['front', 'face', 'side', 'back'].forEach(v => {
+      if (!fourViews && v !== 'front') return;
+      const views = (assetImgs.roleViews && assetImgs.roleViews[name]) || {};
+      const has = v === 'front'
+        ? (views.front || assetImgs.role[name])
+        : views[v];
+      if (has) return;
+      todo.push({label: `角色「${name}」${viewZh[v]}`, fn: () => genRoleViewAsset(i, v)});
+    });
+  });
+  sceneNames.forEach(sc => {
+    if (!assetImgs.scene[sc]) {
+      todo.push({
+        label: `场景「${sc}」`,
+        fn: async () => {
+          assetImgs.scene[sc] = await genAsset('scene', sc, defaultScenePrompt(sc), '场景');
+          assetState.scenes[sc] = assetState.scenes[sc] || {};
+          assetState.scenes[sc].reference = assetImgs.scene[sc];
+        },
+      });
+    }
+  });
+  sb.forEach((s, i) => {
+    if (!assetImgs.story[i]) {
+      todo.push({
+        label: `分镜 ${i + 1}`,
+        fn: async () => {
+          assetImgs.story[i] = await genAsset('story', `s${i + 1}`, defaultStoryPrompt(i), '分镜');
+        },
+      });
+    }
+  });
+  const total = todo.length;
   if (!total) { toast('没有可生成的资产', true); return; }
   toastLoading(`⚡ 一键生成中（共 ${total} 张，每张约 10-30 秒）…`);
   $('assetProgress').style.display = '';
@@ -2596,38 +2639,37 @@ async function genAllAssets() {
     $('assetProgressText').textContent = `已生成 ${doneN}/${total} 张 · ${label}`;
   };
   try {
-    for (let i = 0; i < roles.length; i++) {
-      const r = roles[i]; const name = r.role_name || r.name;
-      if (!assetImgs.role[name]) {
-        assetImgs.role[name] = await genAsset('role', name, `半身肖像照，1980年代中国${r.role_desc || '乡村人物'}，真实人物照片风格，自然光，简洁背景，面部清晰，胶片质感`, '锚点');
-        assetState.roles[name] = assetState.roles[name] || {};
-        assetState.roles[name].reference = assetImgs.role[name];
-        autoSaveProject(true);  // 每张立即保存
-      }
-      tick(`角色「${name}」`);
-    }
-    for (let i = 0; i < sceneNames.length; i++) {
-      const sc = sceneNames[i];
-      if (!assetImgs.scene[sc]) {
-        assetImgs.scene[sc] = await genAsset('scene', sc, `${sc}，1980年代中国乡村环境，写实场景照片，电影感，自然光，胶片质感，无人`, '场景');
-        assetState.scenes[sc] = assetState.scenes[sc] || {};
-        assetState.scenes[sc].reference = assetImgs.scene[sc];
-        autoSaveProject(true);
-      }
-      tick(`场景「${sc}」`);
-    }
-    for (let i = 0; i < sb.length; i++) {
-      if (!assetImgs.story[i]) {
-        assetImgs.story[i] = await genAsset('story', `s${i + 1}`, defaultStoryPrompt(i), '分镜');
-        autoSaveProject(true);
-      }
-      tick(`分镜 ${i + 1}`);
+    for (const t of todo) {
+      await t.fn();
+      tick(t.label);
     }
     renderAssets();
     autoSaveProject(true);
     $('assetProgress').style.display = 'none';
     toast(`✅ 一键生成完成，共 ${total} 张`);
   } catch (e) { $('assetProgress').style.display = 'none'; toast('一键生成中断：' + e.message, true); renderAssets(); }
+}
+
+async function genRoleViewAsset(i, view) {
+  // 一键生成用的角色视图生成（不依赖按钮/弹窗，逐张立即保存）
+  const r = (currentScript.role_list || [])[i];
+  if (!r) return;
+  const name = r.role_name || r.name;
+  const gender = (assetImgs.roleGender && assetImgs.roleGender[name]) || inferGender(r.role_desc || '');
+  const prompt = roleViewPrompt(r, gender, view);
+  assetPrompts.role[name] = assetPrompts.role[name] || defaultRolePrompt(r, gender);
+  const fn = await genAsset('role', `${name}_${view}`, prompt, '锚点', {view});
+  assetImgs.roleViews = assetImgs.roleViews || {};
+  assetImgs.roleViews[name] = assetImgs.roleViews[name] || {};
+  assetImgs.roleViews[name][view] = fn;
+  assetState.roles[name] = assetState.roles[name] || {};
+  assetState.roles[name].views = assetState.roles[name].views || {};
+  assetState.roles[name].views[view] = fn;
+  if (view === 'front') {
+    assetImgs.role[name] = fn;
+    assetState.roles[name].reference = fn;
+  }
+  autoSaveProject(true);  // 每张立即保存
 }
 
 // 给已有参考图补质检（老项目升级后一键补检，结果写入资产表）
