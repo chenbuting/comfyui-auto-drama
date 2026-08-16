@@ -2231,7 +2231,7 @@ function renderAssetState() {
     if (!s.desc) {
       const shots = sbByScene[sc] || [];
       const actions = shots.slice(0, 2).map(x => x.action || '').filter(Boolean).join('；');
-      s.desc = actions ? `${sc}，1980年代中国乡村；${actions}` : `${sc}，1980年代中国乡村`;
+      s.desc = actions ? `${sc}，${projectEraZh()}；${actions}` : `${sc}，${projectEraZh()}`;
     }
   });
   const roleRows = roles.map((r, i) => {
@@ -2335,19 +2335,35 @@ function defaultRolePrompt(r, gender) {
   const desc = r.role_desc || '';
   const gText = genderZh || '根据名字与描述判断性别';
   const gEn = genderEn || 'gender according to the description';
-  return `${gZhHead(gText)}，1980年代中国${desc || '乡村人物'}。${gEn}，半身肖像照，真实人物照片风格，自然光，简洁干净背景，面部清晰，双眼有神，胶片质感，写实摄影，单一人像，画面内无文字、无其他人物、无多余肢体`;
+  return `${gZhHead(gText)}，${projectEraZh()}${desc || '人物'}。${gEn}，半身肖像照，真实人物照片风格，自然光，简洁干净背景，面部清晰，双眼有神，胶片质感，写实摄影，单一人像，画面内无文字、无其他人物、无多余肢体`;
 }
 function gZhHead(t) { return t; }
 
 function defaultScenePrompt(sc) {
-  return `${sc}，1980年代中国乡村环境，写实场景照片，电影感，自然光，胶片质感，画面内无人物、无文字、无现代物品`;
+  const era = projectEraZh();
+  const noModern = era.includes('乡村') ? '，无现代物品' : '';
+  return `${sc}，${era}环境，写实场景照片，电影感，自然光，胶片质感，画面内无人物、无文字${noModern}`;
+}
+
+function projectEraZh() {
+  // 从剧本类型/梗概/场景推断年代与场景基调，保证文字提示词与生图提示词一致
+  if (!currentScript) return '1980年代中国乡村';
+  const s = currentScript;
+  if (s.style) {
+    if (/1980|乡村|农村|校园|怀旧/.test(String(s.style))) return '1980年代中国乡村';
+    if (/城市|都市|现代|科幻|科技|工厂/.test(String(s.style))) return '现代中国城市';
+  }
+  const text = [s.type || '', s.logline || '', (s.storyboard_list || []).map(x => x.scene || '').join(' ')].join(' ');
+  return /城市|都市|信号站|高楼|霓虹|直升机|工厂|学校|现代|洪水/.test(text) ? '现代中国城市' : '1980年代中国乡村';
 }
 
 function defaultStoryPrompt(i) {
   // 中文分镜提示词：直接用剧本的中文要素（场景/动作/对白/情绪）
   const s = (currentScript.storyboard_list || [])[i] || {};
   const parts = [];
-  if (s.scene) parts.push(`场景：${s.scene}`);
+  // 场景描述优先用资产状态表（与文字提示词同一来源，保证生图/出片一致）
+  const scDesc = (assetState.scenes && assetState.scenes[s.scene] && assetState.scenes[s.scene].desc) || s.scene || '';
+  if (scDesc) parts.push(`场景：${scDesc}`);
   if (s.action) parts.push(`动作：${s.action}`);
   if (s.dialogue) parts.push(`对白：${s.dialogue}`);
   if (s.emotion) parts.push(`情绪：${s.emotion}`);
@@ -2366,10 +2382,12 @@ function defaultStoryPrompt(i) {
     return `${n}（${bits || r.role_desc || ''}）`;
   }).join('；');
   const roleLine = roleDesc ? `画面人物形象必须与角色设定一致：${roleDesc}。` : '';
-  return p + `电影感故事板分镜图，竖构图，1980s 中国乡村风格，写实。${roleLine}`
+  return p + `电影感故事板分镜图，竖构图，${projectEraZh()}风格，写实。${roleLine}`
     + `画面中严格只有剧本出现的 ${Math.max((currentScript.storyboard_list || [])[i] && ((currentScript.storyboard_list || [])[i].roles || []).length || 0, 1)} 个人，`
     + `绝对没有额外人物、没有多余的肢体/手臂/手从画面外伸入，每人四肢完整、各两只手、手指清晰不粘连，`
-    + `服装道具正常无穿帮，无文字乱码，无重复人物，无现代物品，无塑料包装盒，无饮料瓶`;
+    + `服装道具正常无穿帮，无文字乱码，无重复人物，无塑料包装盒，无饮料瓶`
+    + (projectEraZh().includes('乡村') ? '，无现代物品' : '')
+    + `；背景元素必须与上面「场景」描述一致（门窗/设备/位置不得凭空增加或替换）`;
 }
 
 async function genRoleImg(i) {
@@ -2402,15 +2420,15 @@ function roleViewPrompt(r, gender, view) {
   const st = (assetState.roles && assetState.roles[name]) || {};
   const gText = {女: '年轻女性', 男: '年轻男性', 未知: ''}[gender] || '';
   const same = `同一人物「${name}」，身份${st.identity || '与正面锚点图相同'}、发型${st.hair || '一致'}、服装${st.costume || '一致'}，与正面锚点图完全同一人，不得改变五官、发型与服装`;
-  const neg = '单一人像，无其他人物，无多余肢体/手指，无重复人物，无文字乱码，无现代物品，1980年代中国乡村风格，胶片质感，写实摄影';
+  const neg = `单一人像，无其他人物，无多余肢体/手指，无重复人物，无文字乱码，${projectEraZh()}风格，胶片质感，写实摄影`;
   if (view === 'face') {
-    return `${gText}，1980年代中国${r.role_desc || '乡村人物'}。脸部特写肖像，面部占满画面，五官清晰，双眼有神，${same}。${neg}`;
+    return `${gText}，${projectEraZh()}${r.role_desc || '人物'}。脸部特写肖像，面部占满画面，五官清晰，双眼有神，${same}。${neg}`;
   }
   if (view === 'side') {
-    return `${gText}，1980年代中国${r.role_desc || '乡村人物'}。全身侧面照，90度正侧面视角，站立姿态自然，${same}。${neg}`;
+    return `${gText}，${projectEraZh()}${r.role_desc || '人物'}。全身侧面照，90度正侧面视角，站立姿态自然，${same}。${neg}`;
   }
   if (view === 'back') {
-    return `${gText}，1980年代中国${r.role_desc || '乡村人物'}。全身背面照，人物背对镜头，完整展现背影、背面发型与服装，${same}。${neg}`;
+    return `${gText}，${projectEraZh()}${r.role_desc || '人物'}。全身背面照，人物背对镜头，完整展现背影、背面发型与服装，${same}。${neg}`;
   }
   return defaultRolePrompt(r, gender);
 }
