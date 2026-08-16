@@ -1116,33 +1116,49 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
                     maxv = max(maxv, int(m.group(1)))
         return maxv
 
+    prev_new_tid = None
     for idx, (task, g) in enumerate(graphs):
-        tid = task["id"]
-        base_name = str(task.get("name") or tid)
+        base_tid = task["id"]
+        base_name = str(task.get("name") or base_tid)
         maxv = _next_task_version(base_name, state["tasks"])
         if maxv > 0:
-            task["name"] = f"{base_name}_v{maxv + 1}"
-        same = [x for x in state["tasks"] if x["id"] == tid]
-        if same and any(x.get("prompt_id") in active_pids for x in same):
+            # 版本化：ID 和名称都带 _vN，链条/删除/去重按唯一版本引用，避免新旧混链
+            ver = maxv + 1
+            task["name"] = f"{base_name}_v{ver}"
+            tid = f"{base_tid}_v{ver}"
+        else:
+            tid = base_tid
+        # 同一段的任意版本还在远程生成/排队 → 拦截（防误重提；等它跑完再提新版本）
+        same_family = [
+            x for x in state["tasks"]
+            if x.get("id") == base_tid or str(x.get("id") or "").startswith(base_tid + "_")
+        ]
+        if same_family and any(x.get("prompt_id") in active_pids for x in same_family):
             results.append({
-                "id": tid, "ok": False,
+                "id": base_tid, "ok": False,
                 "error": "上一版还在生成/排队中，请等它完成后再重提",
                 "failure_code": "F-DUP-SUBMIT",
             })
             continue
-        # 清理同 ID 的死链占位（等待中但从未提交成功）：不占远程队列，重提时移除避免挡路/重复
-        stale_same = [x for x in state["tasks"] if x["id"] == tid and x.get("chain_waiting") and not x.get("prompt_id")]
+        # 清理同段死链占位（等待中但从未提交成功）：不占远程队列，重提时移除避免挡路/重复
+        stale_same = [
+            x for x in state["tasks"]
+            if (x.get("id") == base_tid or str(x.get("id") or "").startswith(base_tid + "_"))
+            and x.get("chain_waiting") and not x.get("prompt_id")
+        ]
         if stale_same:
             state["tasks"] = [x for x in state["tasks"] if x not in stale_same]
         is_chain_waiting = bool(task.get("chain_waiting")) or (
             bool(chain_mode) and (idx > 0 or has_open_chain)
         )
+        # 链式引用：同一批内严格接"本批上一段的新版本"，不落到旧版本
+        chain_prev_ref = prev_new_tid if (bool(chain_mode) and idx > 0 and prev_new_tid) else task.get("chain_prev")
         if not is_chain_waiting:
             try:
                 resp = api_post(server, "/prompt", {"prompt": g, "client_id": "batch_console"})
             except Exception as e:
                 results.append({
-                    "id": tid, "ok": False, "error": f"提交失败：{e}",
+                    "id": base_tid, "ok": False, "error": f"提交失败：{e}",
                     "failure_code": "F-SUBMIT-API",
                 })
                 continue
@@ -1151,7 +1167,7 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
         pid = resp.get("prompt_id") if resp else None
         if not is_chain_waiting and not pid:
             results.append({
-                "id": tid, "ok": False, "error": f"服务器返回异常：{resp}",
+                "id": base_tid, "ok": False, "error": f"服务器返回异常：{resp}",
                 "failure_code": "F-SUBMIT-RESP",
             })
             continue
@@ -1174,11 +1190,12 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
             "downloaded": False,
             "recorded": False,
             "chain_waiting": is_chain_waiting,
-            "chain_prev": task.get("chain_prev")
+            "chain_prev": chain_prev_ref
             or (state["tasks"][-1]["id"] if (chain_mode and idx > 0 and state["tasks"]) else None),
             "chain_done": False,
         })
-        results.append({"id": tid, "ok": True, "prompt_id": pid, "waiting": is_chain_waiting})
+        results.append({"id": base_tid, "ok": True, "task_id": tid, "prompt_id": pid, "waiting": is_chain_waiting})
+        prev_new_tid = tid
     save_state(state)
     return results, None, warnings
 
@@ -4515,6 +4532,17 @@ class Handler(BaseHTTPRequestHandler):
             if not t:
                 self._send(404, json.dumps({"error": "任务不存在"}, ensure_ascii=False))
                 return
+            # 后端保护：任务还在远程生成/排队时禁止删除（前端按钮已隐藏，双保险）
+            pid = t.get("prompt_id")
+            if pid:
+                try:
+                    q = api_get(str(st.get("server") or DEFAULT_SERVER), "/queue")
+                    active = {x[1] for x in q.get("queue_running", [])} | {x[1] for x in q.get("queue_pending", [])}
+                    if pid in active:
+                        self._send(400, json.dumps({"error": "任务正在生成/排队中，不能删除"}, ensure_ascii=False))
+                        return
+                except Exception:
+                    pass  # 队列查不到时放行（保守不误伤已完成任务）
             of = t.get("output_file")
             if of:
                 p = os.path.join(OUTPUTS_DIR, of.get("type", "output"), of.get("subfolder", ""), of.get("filename", ""))
