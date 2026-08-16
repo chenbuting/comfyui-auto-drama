@@ -3039,6 +3039,13 @@ def to_ref2va_six_section(prompt, task=None):
     ast = proj.get("asset_state") or {}
     role_state = ast.get("roles") or {}
     scene_state = ast.get("scenes") or {}
+    ai = proj.get("asset_imgs") or {}
+    role_imgs = ai.get("role") or {}
+    scene_imgs = ai.get("scene") or {}
+    role_desc_map = {
+        (r.get("role_name") or r.get("name") or ""): str(r.get("role_desc") or "")
+        for r in ((proj.get("current_script") or {}).get("role_list") or [])
+    }
     images = [x for x in (task.get("images") or []) if x]
     pic_of = {img: i + 1 for i, img in enumerate(images)}
     seg_roles = [str(x) for x in (task.get("roles") or []) if x]
@@ -3047,10 +3054,13 @@ def to_ref2va_six_section(prompt, task=None):
 
     # 每个角色的参考图（reference 兜底 + 多视图）
     role_refs = {}
-    for name, s in role_state.items():
+    for name in list(role_state.keys()) + [k for k in role_imgs.keys() if k not in role_state]:
+        s = role_state.get(name) or {}
         refs = []
         if s.get("reference"):
             refs.append(str(s["reference"]))
+        if role_imgs.get(name):
+            refs.append(str(role_imgs[name]))  # 权威：当前实际角色锚点图
         for v in ("front", "face", "side", "back"):
             vp = (s.get("views") or {}).get(v)
             if vp:
@@ -3079,6 +3089,8 @@ def to_ref2va_six_section(prompt, task=None):
             desc_bits.append(f"发型：{s['hair']}")
         if s.get("costume"):
             desc_bits.append(f"服装：{s['costume']}")
+        if not desc_bits and role_desc_map.get(name):
+            desc_bits.append(f"设定：{role_desc_map[name]}")
         views = []
         for v in ("front", "face", "side", "back"):
             vp = (s.get("views") or {}).get(v)
@@ -3097,7 +3109,7 @@ def to_ref2va_six_section(prompt, task=None):
         )
 
     if seg_scene and scene_state.get(seg_scene):
-        ref = str(scene_state[seg_scene].get("reference") or "").strip()
+        ref = str(scene_state[seg_scene].get("reference") or scene_imgs.get(seg_scene) or "").strip()
         if ref in pic_of:
             n += 1
             scene_subject = n
@@ -3241,7 +3253,7 @@ def start_expand_job(text, token=""):
                             break
                     except Exception as e:
                         print(f"[expand] 第 {i + 1} 段第 {attempt + 1} 次失败：{str(e)[:60]}", flush=True)
-                        _ensure_llm_loaded(token)
+                        # 不自动重载 LM Studio（用户要求：重载会反复占用/崩溃本机）
                         time.sleep(3)
                 if p:
                     rows[i]["prompt"] = _normalize_llm_prompt(p)
@@ -3303,24 +3315,6 @@ def _save_expand_progress(rows, tid, final=False):
         return True
     except Exception:
         return False
-
-
-def _ensure_llm_loaded(token=""):
-    """LM Studio 不可用时尝试 lms load 重载（防崩溃中断）。"""
-    import subprocess as _sp
-    for _ in range(3):
-        try:
-            r = check_lmstudio(token)
-            if r.get("available"):
-                return True
-        except Exception:
-            pass
-        try:
-            _sp.run(["lms", "load", _lm_model()], capture_output=True, timeout=120)
-        except Exception:
-            pass
-        time.sleep(15)
-    return False
 
 
 def llm_polish_prompts(rows, token=""):
