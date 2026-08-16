@@ -4507,24 +4507,24 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"cleared": True, "remaining": n}, ensure_ascii=False))
             return
         if path == "/api/delete_video":
-            """删除某任务的生成视频（本地文件 + 任务下载标记）。"""
+            """删除某任务：视频文件（如有）一并删除，并移除任务记录（失败/丢失任务也可删）。"""
             task_id = str(body.get("task_id") or "")
             st = load_state()
             tasks = st.get("tasks", [])
             t = next((x for x in tasks if x.get("id") == task_id), None)
-            if not t or not t.get("output_file"):
-                self._send(404, json.dumps({"error": "任务或视频不存在"}, ensure_ascii=False))
+            if not t:
+                self._send(404, json.dumps({"error": "任务不存在"}, ensure_ascii=False))
                 return
-            of = t["output_file"]
-            p = os.path.join(OUTPUTS_DIR, of.get("type", "output"), of.get("subfolder", ""), of.get("filename", ""))
-            if os.path.isfile(p):
-                try:
-                    os.remove(p)
-                except OSError as e:
-                    self._send(400, json.dumps({"error": f"删除失败：{e}"}, ensure_ascii=False))
-                    return
-            t["downloaded"] = False
-            t["output_file"] = None
+            of = t.get("output_file")
+            if of:
+                p = os.path.join(OUTPUTS_DIR, of.get("type", "output"), of.get("subfolder", ""), of.get("filename", ""))
+                if os.path.isfile(p):
+                    try:
+                        os.remove(p)
+                    except OSError as e:
+                        self._send(400, json.dumps({"error": f"删除失败：{e}"}, ensure_ascii=False))
+                        return
+            st["tasks"] = [x for x in tasks if x.get("id") != task_id]
             save_state(st)
             self._send(200, json.dumps({"deleted": True, "task_id": task_id}, ensure_ascii=False))
             return

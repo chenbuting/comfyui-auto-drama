@@ -1454,7 +1454,7 @@ function renderStatusCards() {
         ? `<span class="pill error" title="查看第 8 步失败码速查表">${esc(t.failure_code)}</span>`
         : '';
       const err = t.error ? `<div class="outs" style="color:var(--red)">${fc} ${esc(t.error)}</div>` : '';
-      const del = (t.downloaded || (t.outputs || []).length)
+      const del = !active
         ? `<button class="btn" style="padding:3px 8px;font-size:11px;color:var(--red)" onclick="deleteVideo('${escAttr(t.id)}')">🗑️ 删除</button>`
         : '';
       const regen = t.status === 'completed'
@@ -1747,14 +1747,14 @@ async function mergeSelected() {
 }
 
 async function deleteVideo(taskId) {
-  askConfirm('确定删除这个任务的视频文件吗？删除后可重新生成。', async () => {
+  askConfirm('确定删除这个任务吗？关联的视频文件会一并删除，任务记录不可恢复。', async () => {
     try {
       const r = await fetch('/api/delete_video', {
         method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({task_id: taskId}),
       });
       const d = await r.json();
       if (!r.ok) { toast(d.error || '删除失败', true); return; }
-      toast('🗑️ 视频已删除');
+      toast('🗑️ 任务已删除');
       refreshStatus();
       loadAssembleHistory();
     } catch (e) { toast('删除失败：' + e.message, true); }
