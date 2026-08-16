@@ -75,6 +75,21 @@
 | 字段 | 说明 | 示例 |
 |---|---|---|
 | `port` | 控制台 Web 端口 | `8890` |
+| `max_ref_images` | R2V 单段参考图上限（官方 Ref2VA ≤9） | `8` |
+
+## models（R2V 出片模型，可选）
+
+| 字段 | 说明 | 示例 |
+|---|---|---|
+| `r2v.unet` | Ref2VA 扩散模型（放远程 `models/diffusion_models/`） | `minimax_h3_ref2va_pruned_int8_convrot.safetensors` |
+| `r2v.clip` | Ref2VA 文本编码器（放远程 `models/text_encoders/`） | `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
+
+**说明**：
+- `r2v.unet` 必须是官方 Ref2VA 权重（与 T2V/I2V 的 FL2VA 是两套模型）；提交时自动检测服务器
+  是否已加载，缺失则回退 FL2VA 并提示。
+- `r2v.clip` 开源默认用官方 `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`；个人本地可换成
+  未审查版（如 `qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors`），
+  但**不要**把未审查模型名写进提交到开源仓库的 `config.example.json`。
 
 ---
 

@@ -5,6 +5,20 @@
 
 ---
 
+## 2026-08-16 · v0.13.1 — R2V 文本编码器开源默认改官方权重
+
+### 本次更新内容
+
+- `models.r2v.clip` 开源默认/示例改为官方 `qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors`
+  （远端 ComfyUI 自带，开箱即用）；个人本地配置保留未审查版 qwen（config.json 不提交 git）
+- CONFIG.md 新增 `models` 与 `console.max_ref_images` 说明，并提示未审查模型名不要写进开源示例
+
+### 影响与注意事项
+
+- 本机 config.json 未改动，仍用未审查 CLIP；开源用户复制 config.example.json 即为官方模型
+
+---
+
 ## 2026-08-16 · v0.13.0 — R2V 改官方 Ref2VA：六段式 + 独立权重 + 角色四视图
 
 ### 本次更新内容

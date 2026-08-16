@@ -63,7 +63,7 @@ _CONFIG_DEFAULTS = {
     "models": {
         "r2v": {
             "unet": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
-            "clip": "qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors",
+            "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
         }
     },
     "console": {"port": 8890, "max_ref_images": 8},

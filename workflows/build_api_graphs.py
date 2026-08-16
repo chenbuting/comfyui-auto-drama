@@ -20,7 +20,7 @@ TASKS_DIR = os.path.join(BASE, "tasks")
 R2V_TURBO_LORA = "minimax_h3_turbo_v4_step600_ema.safetensors"
 R2V_LORA_STRENGTH = 0.75
 R2V_STEPS = 4
-R2V_UNCENSORED_CLIP = "qwen3vl_32b_h3_ultra_uncensored_heretic_int8_convrot.safetensors"
+R2V_CLIP_DEFAULT = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"  # 开源默认：官方文本编码器
 R2V_UNET_DEFAULT = "minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 R2V_FINAL_STEPS = 20
 R2V_MAX_IMAGES = 8  # 官方 Ref2VA 上限 9 张；默认 8（主角多视图 + 场景 + 分镜）
@@ -35,11 +35,11 @@ def _r2v_cfg():
         max_n = int((d.get("console") or {}).get("max_ref_images") or R2V_MAX_IMAGES)
         return {
             "unet": m.get("unet") or R2V_UNET_DEFAULT,
-            "clip": m.get("clip") or R2V_UNCENSORED_CLIP,
+            "clip": m.get("clip") or R2V_CLIP_DEFAULT,
             "max_images": min(max_n, 9),
         }
     except Exception:
-        return {"unet": R2V_UNET_DEFAULT, "clip": R2V_UNCENSORED_CLIP, "max_images": R2V_MAX_IMAGES}
+        return {"unet": R2V_UNET_DEFAULT, "clip": R2V_CLIP_DEFAULT, "max_images": R2V_MAX_IMAGES}
 
 # 纯 widget 节点：前端 widgets_values 顺序 → API input 名（无连接输入时按此映射）
 WIDGET_MAP = {
