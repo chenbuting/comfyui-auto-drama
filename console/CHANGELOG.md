@@ -5,6 +5,21 @@
 
 ---
 
+## 2026-08-16 · v0.13.3 — LLM 连接支持 oMLX（8001）+ 设置标签通用化
+
+### 本次更新内容
+
+- 本地 LLM 可配置 oMLX（如 `http://127.0.0.1:8001`），token 复用本地服务 key；
+  设置抽屉 Token 标签改为「本地 LLM API Token（LM Studio / oMLX）」
+- 扩写仍不自动重载任何模型服务（v0.13.2 起行为不变）
+
+### 影响与注意事项
+
+- config.json `llm.local.url` 指向哪个本地服务就用哪个；oMLX 8bit 未审查模型
+  （Qwen3.6-35B-A3B）实测扩写约 2 分钟/段，比 LM Studio 快
+
+---
+
 ## 2026-08-16 · v0.13.2 — 移除 LM Studio 自动重载（防止连环 lms load 拖垮本机）
 
 ### 本次更新内容
