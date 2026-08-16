@@ -1312,17 +1312,17 @@ function renderPreview() {
 }
 
 function effectiveRefs(i) {
-  // 提交时实际参考图：项目资产优先（角色锚点图按角色顺序 + 本段场景图 + 本段分镜图），
-  // 下拉框里的手动选择只作补充，避免旧配置覆盖新资产
+  // 提交时实际参考图：分镜图放第一位（Picture 1 = 首帧对齐 + 构图基准），
+  // 角色锚点图保身份、场景图保环境；下拉框手动选择只作补充
   const roles = (currentScript && currentScript.role_list) || [];
   const refs = [];
+  if (assetImgs.story[i]) refs.push(assetImgs.story[i]);
   roles.slice(0, 2).forEach(r => {
     const n = r.role_name || r.name;
     if (assetImgs.role[n]) refs.push(assetImgs.role[n]);
   });
   const scene = ((currentScript && currentScript.storyboard_list) || [])[i] || {};
   if (scene.scene && assetImgs.scene[scene.scene]) refs.push(assetImgs.scene[scene.scene]);
-  if (assetImgs.story[i]) refs.push(assetImgs.story[i]);
   [$('roleImage1').value, $('roleImage2').value, $('sceneImage').value].forEach(v => {
     if (v && !refs.includes(v)) refs.push(v);
   });
