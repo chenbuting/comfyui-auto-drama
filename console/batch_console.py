@@ -1091,22 +1091,49 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
             has_open_chain = not dead
             break
     results = []
-    # 同名任务自动加后缀序号（v2/v3…），避免状态列表里多个同名任务无法区分
-    name_counts = {}
-    for x in state["tasks"]:
-        n = str(x.get("name") or "")
-        if n:
-            name_counts[n] = name_counts.get(n, 0) + 1
+    # 查询远程队列：只有上一版还在生成/排队（running/pending）才拦截重提；
+    # 已完成/失败/丢失的旧任务可再次提交，版本号从已有最大序号往后接（v2/v3…）
+    try:
+        _q = api_get(server, "/queue")
+        active_pids = {t[1] for t in _q.get("queue_running", [])} | {t[1] for t in _q.get("queue_pending", [])}
+        _queue_ok = True
+    except Exception:
+        _queue_ok = False
+    if not _queue_ok:
+        # 查不到队列时保守处理：所有已提交的旧任务都视为活跃，避免误重提
+        active_pids = {x.get("prompt_id") for x in state["tasks"] if x.get("prompt_id")}
+
+    def _next_task_version(base, tasks):
+        """已有 base / base_vN 记录时返回最大版本号（base 本身算 1），无记录返回 0。"""
+        maxv = 0
+        for x in tasks:
+            n = str(x.get("name") or "")
+            if n == base:
+                maxv = max(maxv, 1)
+            else:
+                m = re.fullmatch(re.escape(base) + r"_v(\d+)", n)
+                if m:
+                    maxv = max(maxv, int(m.group(1)))
+        return maxv
+
     for idx, (task, g) in enumerate(graphs):
         tid = task["id"]
         base_name = str(task.get("name") or tid)
-        dup = name_counts.get(base_name, 0)
-        if dup > 0:
-            task["name"] = f"{base_name}_v{dup + 1}"
-            name_counts[base_name] = dup + 1
-        if any(x.get("prompt_id") for x in state["tasks"] if x["id"] == tid):
-            results.append({"id": tid, "ok": False, "error": "已提交过，跳过", "failure_code": "F-DUP-SUBMIT"})
+        maxv = _next_task_version(base_name, state["tasks"])
+        if maxv > 0:
+            task["name"] = f"{base_name}_v{maxv + 1}"
+        same = [x for x in state["tasks"] if x["id"] == tid]
+        if same and any(x.get("prompt_id") in active_pids for x in same):
+            results.append({
+                "id": tid, "ok": False,
+                "error": "上一版还在生成/排队中，请等它完成后再重提",
+                "failure_code": "F-DUP-SUBMIT",
+            })
             continue
+        # 清理同 ID 的死链占位（等待中但从未提交成功）：不占远程队列，重提时移除避免挡路/重复
+        stale_same = [x for x in state["tasks"] if x["id"] == tid and x.get("chain_waiting") and not x.get("prompt_id")]
+        if stale_same:
+            state["tasks"] = [x for x in state["tasks"] if x not in stale_same]
         is_chain_waiting = bool(task.get("chain_waiting")) or (
             bool(chain_mode) and (idx > 0 or has_open_chain)
         )
