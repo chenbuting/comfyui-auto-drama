@@ -6,6 +6,57 @@
 
 > 本项目为演示/教学用途。模型输出质量受提示词与工作流配置影响，请勿用于任何违法违规内容。
 
+## 系统架构
+
+```mermaid
+flowchart TB
+  subgraph WEB["Web 控制台（console/ · Python 标准库 + 原生前端）"]
+    W1["剧本生成 / 改写"]
+    W2["规范提示词<br/>（三段式 + R2V 自动六段式）"]
+    W3["参考资产<br/>角色四视图 / 场景图 / 分镜图"]
+    W4["任务提交<br/>版本化 ID + 链式衔接"]
+    W5["状态监控 / 自动下载"]
+    W6["一键合成成片<br/>字幕 / CTA / 去开头杂音"]
+    W1 --> W2 --> W3 --> W4 --> W5 --> W6
+  end
+
+  subgraph LOCAL["本地服务"]
+    L1["语言模型<br/>oMLX(8001) / LM Studio / 云端 API"]
+    L2["文生图<br/>Boogu-Image(8081) / 云端 API"]
+    L3["视觉质检<br/>多模态模型"]
+  end
+
+  subgraph REMOTE["远程 ComfyUI（Windows/Linux）"]
+    R1["H3 工作流<br/>T2V / I2V / R2V(Ref2VA)"]
+    R2["扩散权重<br/>ref2va + fl2va"]
+    R3["文本编码器<br/>官方 nvfp4 / 无审查 CLIP"]
+    R4["加速<br/>TurboLoRA + SageAttention"]
+    R1 --> R2
+    R1 --> R3
+    R1 --> R4
+  end
+
+  subgraph DATA["数据与配置"]
+    D1["console.db（SQLite 状态）"]
+    D2["素材 / 输出目录"]
+    D3["config.json（可配置化）"]
+  end
+
+  W1 --> L1
+  W2 --> L1
+  W3 --> L2
+  W3 --> L3
+  W4 --> R1
+  R1 --> W5
+  W4 --> D1
+  W5 --> D1
+  W5 --> D2
+  W2 --> D3
+  W3 --> D2
+```
+
+**链路一句话**：控制台把「剧本 → 提示词 → 参考资产」编排好，提交到远程 ComfyUI 用 H3 生成带原生立体声的视频，自动下载回本地合成成片；语言模型 / 文生图 / 质检全部支持本地与云端切换。
+
 ## 功能一览
 
 - 📜 **剧本流水线**：粘贴剧本片段 / 导入剧本 JSON → AI 生成或改写分镜剧本
