@@ -19,6 +19,24 @@
 
 ---
 
+## 2026-08-16 · v0.13.10 — 开源准备清理（相对路径 / 改名 / 密钥防护 / README）
+
+### 本次更新内容
+
+- 消除代码与文档里的绝对路径：
+  - `workflows/make_assets.py` 字体路径改为跨平台查找（`H3_FONT` 环境变量 > 项目内字体 > macOS/Windows 系统字体）
+  - `console/README.md` 启动命令改为相对路径
+- 工作流文件改名：`video_minimax_h3_r2v (1).json` → `video_minimax_h3_r2v.json`（去掉空格/括号）
+- `.gitignore` 增加 `config*.bak` / `*.bak`（防止含 API Key 的配置备份被误提交）
+- README 更新：R2V 六段式自动包装、角色四视图、ref2va 权重要求与缺失回退说明、CLIP 开源默认
+
+### 影响与注意事项
+
+- 本机 `config.json.bak` 含真实 api_key，已加入 gitignore 不会提交；建议确认后自行删除
+- 纯文档/脚本路径调整，不影响运行逻辑；控制台服务无需重启（下次启动自动生效）
+
+---
+
 ## 2026-08-16 · v0.13.9 — 修复视频播放只播几秒：/media 支持 HTTP Range 分段
 
 ### 本次更新内容

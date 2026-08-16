@@ -13,11 +13,27 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_DIR = "/tmp/h3_assets"
 os.makedirs(OUT_DIR, exist_ok=True)
 
-FONT_PATH = "/System/Library/Fonts/Hiragino Sans GB.ttc"
+
+def _find_font():
+    """跨平台字体查找：环境变量 H3_FONT > 项目内字体 > 系统字体（macOS/Windows）。"""
+    candidates = [
+        os.environ.get("H3_FONT", ""),
+        os.path.join(BASE, "素材", "字体", "NotoSansSC.ttf"),
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "C:/Windows/Fonts/msyh.ttc",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return candidates[1]
+
+
+FONT_PATH = _find_font()
 
 def make_text_png(text, out, size=56, bar=True):
     from PIL import Image, ImageDraw, ImageFont
-    font = ImageFont.truetype("/Volumes/macos/Knowledge_Base_V2/comfyui项目/素材/字体/NotoSansSC.ttf", size)
+    font = ImageFont.truetype(_find_font(), size)
     try:
         font.set_variation_by_axes([800])
     except Exception:

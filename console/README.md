@@ -5,7 +5,7 @@
 ## 快速开始
 
 ```bash
-cd /Volumes/macos/Knowledge_Base_V2/comfyui项目/batch_console
+cd console
 python3 batch_console.py 8890
 ```
 

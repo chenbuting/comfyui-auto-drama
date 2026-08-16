@@ -1,6 +1,8 @@
 # ---- 配置与密钥 ----
 config.json
 config.*.local.json
+config*.bak
+*.bak
 .env
 *.env
 
