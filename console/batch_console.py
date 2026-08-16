@@ -1410,6 +1410,15 @@ def advance_chain(server, state):
         ref_imgs = list(dict.fromkeys(base_refs[:3]))
         if chain_img not in ref_imgs:
             ref_imgs.append(chain_img)
+        # 关键：waiting 任务从未提交过，其参考图（锚点/场景/分镜）还没上传到远程，
+        # 必须在上传链帧之外把所有本地参考图也上传，否则 POST /prompt 会 400
+        for img in ref_imgs:
+            lp = find_image(img)
+            if lp:
+                try:
+                    upload_image(server, lp, img)
+                except Exception as e:
+                    print(f"[chain] 上传参考图失败 {img}: {e}")
         sys.path.insert(0, DEFAULT_WORKFLOW_DIR)
         try:
             import build_api_graphs as bg
