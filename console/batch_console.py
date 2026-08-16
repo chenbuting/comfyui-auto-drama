@@ -1405,11 +1405,23 @@ def advance_chain(server, state):
         except Exception as e:
             print(f"[chain] 上传失败：{e}")
             continue
-        # 下一段：用任务自己的参考图（角色/场景/分镜图，非链帧）+ 上段末帧 → R2V；否则 I2V
+        # 下一段：链式参考图 = 上段末帧（P1，首帧对齐）+ 本段场景 + 角色锚点。
+        # 去掉分镜图：分镜图场景可能与上段末帧不同，混在一起会让 H3 生成场景切换
         base_refs = [x for x in (nxt.get("images") or []) if x and not str(x).startswith("chain_")]
-        ref_imgs = list(dict.fromkeys(base_refs[:3]))
+        ref_imgs = [x for x in base_refs if not (str(x).startswith("分镜_") or str(x).startswith("story_"))]
+        ref_imgs = list(dict.fromkeys(ref_imgs[:3]))
         if chain_img not in ref_imgs:
-            ref_imgs.append(chain_img)
+            ref_imgs.insert(0, chain_img)  # 链帧放第一位：首帧对齐 + 构图延续
+        # 链式提示词：首帧延续上一段末帧，整段保持单一场景
+        chain_prompt = str(nxt.get("prompt") or "")
+        if chain_prompt and "不切换场景" not in chain_prompt:
+            chain_prompt = (
+                " 首帧严格延续上一段末帧的场景、人物位置与光线；"
+                "整段画面保持单一场景，不出现场景切换、不出现其他地点。"
+            ).join([chain_prompt, ""]) if False else chain_prompt + (
+                " 首帧严格延续上一段末帧的场景、人物位置与光线；"
+                "整段画面保持单一场景，不出现场景切换、不出现其他地点。"
+            )
         # 关键：waiting 任务从未提交过，其参考图（锚点/场景/分镜）还没上传到远程，
         # 必须在上传链帧之外把所有本地参考图也上传，否则 POST /prompt 会 400
         for img in ref_imgs:
@@ -1425,40 +1437,24 @@ def advance_chain(server, state):
         except Exception as e:
             print(f"[chain] 加载 build_api_graphs 失败：{e}")
             continue
-        if ref_imgs:
-            task = {
-                "id": nxt["id"],
-                "name": nxt.get("name", nxt["id"]),
-                "mode": "r2v",
-                "prompt": nxt.get("prompt", ""),
-                "quality": nxt.get("quality"),
-                "steps": nxt.get("steps"),
-                "duration": nxt.get("duration", 10),
-                "mp": nxt.get("mp", 1.0),
-                "prefix": nxt.get("prefix", ""),
-                "images": ref_imgs[:4],
-                "story_image": nxt.get("story_image"),
-                "ref_video": nxt.get("ref_video"),
-                "seed": random.randrange(10 ** 15),
-            }
-            build_fn = bg.build_r2v
-        else:
-            task = {
-                "id": nxt["id"],
-                "name": nxt.get("name", nxt["id"]),
-                "mode": "i2v",
-                "prompt": ensure_i2v_prompt(nxt.get("prompt", "")),
-                "quality": nxt.get("quality"),
-                "steps": nxt.get("steps"),
-                "duration": nxt.get("duration", 10),
-                "mp": nxt.get("mp", 1.0),
-                "prefix": nxt.get("prefix", ""),
-                "image": chain_img,
-                "story_image": nxt.get("story_image"),
-                "ref_video": nxt.get("ref_video"),
-                "seed": random.randrange(10 ** 15),
-            }
-            build_fn = bg.build_i2v
+        # 链式衔接统一用 I2V：上段末帧作为本段首帧图，画面从上帧直接发展（最连贯）。
+        # R2V 多参考下 H3 不保证从链帧开始，段间会跳变。
+        task = {
+            "id": nxt["id"],
+            "name": nxt.get("name", nxt["id"]),
+            "mode": "i2v",
+            "prompt": ensure_i2v_prompt(chain_prompt),
+            "quality": nxt.get("quality"),
+            "steps": nxt.get("steps"),
+            "duration": nxt.get("duration", 10),
+            "mp": nxt.get("mp", 1.0),
+            "prefix": nxt.get("prefix", ""),
+            "image": chain_img,
+            "story_image": nxt.get("story_image"),
+            "ref_video": nxt.get("ref_video"),
+            "seed": random.randrange(10 ** 15),
+        }
+        build_fn = bg.build_i2v
         try:
             g = build_fn(task)
             resp = api_post(server, "/prompt", {"prompt": g, "client_id": "batch_console"})
@@ -1472,12 +1468,9 @@ def advance_chain(server, state):
         nxt["prompt_id"] = pid
         nxt["submitted_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         nxt["chain_waiting"] = False
-        if ref_imgs:
-            nxt["images"] = ref_imgs[:4]
-            nxt["mode"] = "r2v"
-        else:
-            nxt["image"] = chain_img
-            nxt["mode"] = "i2v"
+        nxt["image"] = chain_img
+        nxt["images"] = []
+        nxt["mode"] = "i2v"
         t["chain_done"] = True
         changed = True
         print(f"[chain] {t.get('name')} → {nxt.get('name')} 已提交（{pid}）")

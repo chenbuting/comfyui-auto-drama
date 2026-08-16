@@ -1334,6 +1334,11 @@ async function submit() {
   let tasks = collectPromptTasks();
   tasks = tasks.filter(t => t.prompt);
   if (!tasks.length) { toast('没有可提交的任务（请先在第 4 步生成提示词）', true); return; }
+  // 多段连续剧情默认勾选链式衔接（每段独立场景可手动取消）
+  if (tasks.length > 1 && !$('chainMode').checked) {
+    $('chainMode').checked = true;
+    toast('连续剧情已自动勾选链式衔接（上段末帧 → 下段首帧）');
+  }
   // 一键分辨率覆盖
   const globalMp = $('submitMp').value;
   if (globalMp) tasks = tasks.map(t => ({...t, mp: parseFloat(globalMp)}));
@@ -2012,10 +2017,8 @@ async function loadProject() {
     if (p.prompt_tasks && p.prompt_tasks.length) {
       promptTasks = p.prompt_tasks;
       renderPromptCards();
-      // 多段连续剧情：未显式设置过 chain_mode 时默认勾选链式衔接
-      if (typeof p.chain_mode !== 'boolean' && p.prompt_tasks.length > 1) {
-        $('chainMode').checked = true;
-      }
+      // 多段连续剧情：提交时默认勾选链式衔接（每段独立场景可手动取消）
+      if (p.prompt_tasks.length > 1) $('chainMode').checked = true;
     }
     if (p.asset_imgs) assetImgs = p.asset_imgs;
     if (p.asset_prompts) assetPrompts = p.asset_prompts;
