@@ -929,15 +929,22 @@ def enhance_prompt(prompt, task=None):
                 p = p.replace(desc, desc + f" 环境为{scene_desc}{scene_ref}。", 1)
             break
 
-    # 6b. 分镜图构图引用：参考图里有分镜图时，明确其构图/机位/人物站位基准作用
-    #     （仅非 R2V 模式注入；R2V 由六段式 <Picture N> 故事板声明负责）
+    # 6b. 分镜图引用（仅非 R2V；R2V 由六段式负责）
+    #     若同段已有链帧，分镜只作过程参考，禁止写成「首帧按分镜展开」
+    has_chain_ref = any(str(x).startswith("chain_") for x in refs)
     for idx, img in enumerate(refs):
         if mode != "r2v" and (str(img).startswith("分镜_") or str(img).startswith("story_")):
             pic = idx + 1
-            comp = (
-                f" 本镜构图、机位、景别、人物站位与画面内容严格参照 <Picture {pic}>（分镜图）；"
-                "首帧按分镜图构图展开，人物位置与画面布局保持一致。"
-            )
+            if has_chain_ref:
+                comp = (
+                    f" <Picture {pic}>（分镜）为本段过程参考：从链帧首帧之后自然过渡到分镜所展现的场景内容与动作；"
+                    "分镜不是首帧，也不是收尾定格。"
+                )
+            else:
+                comp = (
+                    f" 本镜构图、机位、景别、人物站位与画面内容严格参照 <Picture {pic}>（分镜图）；"
+                    "首帧按分镜图构图展开，人物位置与画面布局保持一致。"
+                )
             if desc:
                 p = p.replace(desc, desc + comp, 1)
             else:
@@ -1030,12 +1037,12 @@ def extract_last_frame(video_path):
     return out_png
 
 
-def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None, chain_style="frame"):
+def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None, chain_style="frame_story"):
     warnings = []
-    # chain_style: frame=仅末帧I2V（原版）；frame_story=末帧+分镜 R2V
-    chain_style = str(chain_style or "frame").strip() or "frame"
+    # chain_style: frame=仅末帧I2V；frame_story=末帧硬接首帧 + 分镜过程参考（推荐）
+    chain_style = str(chain_style or "frame_story").strip() or "frame_story"
     if chain_style not in ("frame", "frame_story"):
-        chain_style = "frame"
+        chain_style = "frame_story"
     # R2V 任务：三段式 → 官方六段式（仅本次会直接提交的段；链式等待段保持三段式，
     # 后续由 advance_chain 按 chain_style 转 I2V 或 R2V）
     for idx, t in enumerate(tasks):
@@ -1590,8 +1597,8 @@ def advance_chain(server, state):
             continue
         # 链式方式：frame=仅末帧 I2V；frame_story=末帧+分镜 R2V（用户可选）
         chain_style = (
-            str(nxt.get("chain_style") or state.get("chain_style") or "frame").strip()
-            or "frame"
+            str(nxt.get("chain_style") or state.get("chain_style") or "frame_story").strip()
+            or "frame_story"
         )
         use_story = chain_style == "frame_story"
         story = str(nxt.get("story_image") or "").strip()
@@ -1619,17 +1626,21 @@ def advance_chain(server, state):
             ref_imgs = list(dict.fromkeys(ref_imgs[:3]))
             if chain_img not in ref_imgs:
                 ref_imgs.insert(0, chain_img)
-        # 链式提示词：首帧延续上一段末帧
+        # 链式提示词：首帧硬接上一段末帧；分镜只引导过程中的自然过渡
         chain_prompt = str(nxt.get("prompt") or "")
-        if chain_prompt and "不切换场景" not in chain_prompt:
+        if chain_prompt and "第 0.00 秒" not in chain_prompt and "上一段末帧" not in chain_prompt:
             chain_prompt = chain_prompt + (
-                " 首帧严格延续上一段末帧的场景、人物位置与光线；"
-                "整段画面保持单一场景，不出现场景切换、不出现其他地点。"
+                " 第 0.00 秒首帧必须与上一段末帧完全一致（场景、人物位置、姿势与光线），不得跳切；"
             )
-        if use_story and story and "分镜图" not in chain_prompt:
+        if use_story and story:
+            if "过程参考" not in chain_prompt:
+                chain_prompt = chain_prompt + (
+                    " 从该首帧之后，按本段提示词与分镜图（过程参考）自然发展动作、机位与场景内容；"
+                    "分镜不是首帧构图，也不强制以分镜画面定格收尾。"
+                )
+        elif chain_prompt and "不切换场景" not in chain_prompt:
             chain_prompt = chain_prompt + (
-                " 本镜机位、景别、构图与人物站位参考分镜图；"
-                "动作与对白按本段提示词，外貌与服装保持角色锚点一致。"
+                " 整段画面保持单一场景，不出现场景切换、不出现其他地点。"
             )
         # waiting 任务参考图可能还没上传
         for img in ref_imgs:
@@ -1863,7 +1874,7 @@ def resume_from_breakpoint(server=None):
             t["paused_by_user"] = False
             t["chain_prev"] = batch[last_done_i].get("id")
             if not t.get("chain_style"):
-                t["chain_style"] = state.get("chain_style") or "frame"
+                t["chain_style"] = state.get("chain_style") or "frame_story"
 
     state["chain_control"] = {
         "paused": False,
@@ -3467,25 +3478,41 @@ def to_ref2va_six_section(prompt, task=None):
                 f"「{seg_scene}」环境的空间布局与氛围完整保留。"
             )
 
+    has_chain = any(str(x).startswith("chain_") for x in images)
+
     if story_img and story_img in pic_of:
-        pic_lines.append(
-            f"<Picture {pic_of[story_img]}> 是本段故事板参考图，定义机位、景别、构图与人物站位，"
-            "不作为首帧锁定。"
-        )
-        retention_lines.append(
-            f"<Picture {pic_of[story_img]}> (storyboard): weak_reference - "
-            "仅参考其构图、机位与人物站位，不复制其静态画面。"
-        )
+        if has_chain:
+            # 链式：末帧已锁首帧；分镜只引导本段过程中的自然过渡，不当首帧/收尾定格
+            pic_lines.append(
+                f"<Picture {pic_of[story_img]}> 是本段故事板（过程参考），"
+                "描述从首帧状态自然发展到的场景内容、动作、机位与人物关系变化；"
+                "不是第 0.00 秒首帧，也不是必须定格的收尾帧。"
+            )
+            retention_lines.append(
+                f"<Picture {pic_of[story_img]}> (storyboard progression): weak_reference - "
+                "仅引导本段过程中的动作、机位与场景内容自然过渡；"
+                "不锁定首帧，不以该图为结尾定格。"
+            )
+        else:
+            pic_lines.append(
+                f"<Picture {pic_of[story_img]}> 是本段故事板参考图，定义机位、景别、构图与人物站位，"
+                "不作为首帧锁定。"
+            )
+            retention_lines.append(
+                f"<Picture {pic_of[story_img]}> (storyboard): weak_reference - "
+                "仅参考其构图、机位与人物站位，不复制其静态画面。"
+            )
 
     for ci in images:
         if str(ci).startswith("chain_") and ci in pic_of:
             pic_lines.append(
-                f"<Picture {pic_of[ci]}> 是上一段末帧，作为本视频第 0.00 秒的首帧"
-                "（keyframe completion），本段从该帧的场景、人物位置与光线无缝延续。"
+                f"<Picture {pic_of[ci]}> 是上一段末帧，必须作为本视频第 0.00 秒的首帧"
+                "（keyframe completion）：场景、人物位置、姿势与光线与该帧一致，无缝承接；"
+                "从该帧之后再按本段提示词与故事板过程参考自然发展。"
             )
             retention_lines.append(
                 f"<Picture {pic_of[ci]}> (first frame): fully_preserved - "
-                "作为本段首帧完整保留其场景、人物位置与光线。"
+                "第 0.00 秒首帧完整保留上一段末帧的场景、人物位置与光线，不得跳切。"
             )
 
     if not subject_lines and not pic_lines:
@@ -3493,7 +3520,7 @@ def to_ref2va_six_section(prompt, task=None):
 
     # summary
     task_types = ["reference generation"]
-    if any(str(x).startswith("chain_") and x in pic_of for x in images):
+    if has_chain:
         task_types.append("keyframe completion")
     subjects_txt = "、".join(
         f"<Subject {subject_of[nm]}>（{nm}）" for nm in seg_roles if nm in subject_of
@@ -3501,11 +3528,18 @@ def to_ref2va_six_section(prompt, task=None):
     if scene_subject:
         subjects_txt += (("、" if subjects_txt else "") + f"<Subject {scene_subject}>（{seg_scene}环境）")
     action_txt = str(task.get("name") or "本段剧情")
-    summary = (
-        f"[{' + '.join(task_types)}] 本段（{action_txt}）展示 "
-        f"{subjects_txt or '主体内容'}；人物身份与场景布局分别由对应参考图锁定，"
-        "构图按故事板参考图规划，声音与画面同步生成。"
-    )
+    if has_chain and story_img and story_img in pic_of:
+        summary = (
+            f"[{' + '.join(task_types)}] 本段（{action_txt}）展示 "
+            f"{subjects_txt or '主体内容'}；第 0 秒首帧严格承接上一段末帧，"
+            "随后按提示词与故事板过程参考自然过渡展现本段场景内容，声音与画面同步生成。"
+        )
+    else:
+        summary = (
+            f"[{' + '.join(task_types)}] 本段（{action_txt}）展示 "
+            f"{subjects_txt or '主体内容'}；人物身份与场景布局分别由对应参考图锁定，"
+            "构图按故事板参考图规划，声音与画面同步生成。"
+        )
 
     # detailed_description：首次出现角色名时插入 <Subject N> 标签（正文保持中文可读）
     marked = body
@@ -4401,7 +4435,7 @@ class Handler(BaseHTTPRequestHandler):
             tasks = body.get("tasks", [])
             auto = bool(body.get("auto_download", True))
             chain = bool(body.get("chain_mode", False))
-            chain_style = body.get("chain_style") or "frame"
+            chain_style = body.get("chain_style") or "frame_story"
             role_images = body.get("role_images") or []
             scene_image = body.get("scene_image") or None
             if not tasks:
@@ -5011,7 +5045,7 @@ class Handler(BaseHTTPRequestHandler):
                         st2["projects"] = projects2
                     save_state(st2)
             server = st.get("server") or DEFAULT_SERVER
-            cs = str(body.get("chain_style") or t.get("chain_style") or st.get("chain_style") or "frame")
+            cs = str(body.get("chain_style") or t.get("chain_style") or st.get("chain_style") or "frame_story")
             results, err, _warn = submit_tasks(
                 server, [new_task], auto_download=True,
                 chain_mode=bool(body.get("chain_mode")),

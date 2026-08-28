@@ -413,13 +413,13 @@
       <div class="row">
         <label style="font-size:13px"><input type="checkbox" id="chainMode"> 🔗 链式衔接（上段末帧 → 下段首帧）</label>
         <label id="chainStyleWrap" style="font-size:13px;display:none">衔接方式
-          <select id="chainStyle" style="width:220px">
-            <option value="frame" selected>仅末帧衔接（原版·更连贯）</option>
-            <option value="frame_story">末帧 + 分镜（兼顾构图）</option>
+          <select id="chainStyle" style="width:260px">
+            <option value="frame_story" selected>末帧硬接 + 分镜过程参考（推荐）</option>
+            <option value="frame">仅末帧衔接（原版·不用分镜）</option>
           </select>
         </label>
         <div class="hint" style="font-size:11px;margin:2px 0 8px 0;width:100%">
-          连续剧情建议勾选链式。衔接方式：仅末帧=画面更顺；末帧+分镜=顺的同时参考本段分镜构图。不勾链式则每段独立 R2V+分镜。
+          链式 = 下一段第 1 帧必须等于上一段最后一帧。推荐「末帧硬接+分镜」：接戏锁死，中间按本段分镜和提示词自然往下演（分镜不当首帧、也不当收尾定格）。
         </div>
         <label style="font-size:13px"><input type="checkbox" id="qualityMode" checked> 🎧 成片质量（无加速LoRA·20步，声音清晰，慢）</label>
         <label style="font-size:13px">步数
@@ -716,9 +716,9 @@
       🔗 链式衔接（用上一段末帧接本段首帧，保证画面连续）
     </label>
     <label class="field" id="regenChainStyleWrap" style="margin:0 0 8px 26px;display:none">衔接方式
-      <select id="regenChainStyle" style="width:220px">
-        <option value="frame" selected>仅末帧衔接（原版）</option>
-        <option value="frame_story">末帧 + 分镜</option>
+      <select id="regenChainStyle" style="width:260px">
+        <option value="frame_story" selected>末帧硬接 + 分镜过程参考</option>
+        <option value="frame">仅末帧衔接（不用分镜）</option>
       </select>
     </label>
     <div class="hint" style="font-size:11px;color:var(--muted);margin:-2px 0 8px 26px">
@@ -912,7 +912,7 @@ function autoSaveProject(silent) {
         role_images: [$('roleImage1').value, $('roleImage2').value].filter(Boolean),
         scene_image: $('sceneImage').value || null,
         chain_mode: $('chainMode').checked,
-        chain_style: ($('chainStyle') && $('chainStyle').value) || 'frame',
+        chain_style: ($('chainStyle') && $('chainStyle').value) || 'frame_story',
         asset_imgs: assetImgs,
         asset_prompts: assetPrompts,
         asset_meta: assetMeta,
@@ -1439,7 +1439,7 @@ async function submit() {
         server: $('serverInput').value.trim(), tasks,
         auto_download: $('autoDownload').checked,
         chain_mode: $('chainMode').checked,
-        chain_style: ($('chainStyle') && $('chainStyle').value) || 'frame',
+        chain_style: ($('chainStyle') && $('chainStyle').value) || 'frame_story',
         role_images: [$('roleImage1').value, $('roleImage2').value].filter(Boolean),
         scene_image: $('sceneImage').value || null,
       }),
@@ -1854,7 +1854,7 @@ async function regenSubmit() {
         steps: parseInt($('regenSteps').value, 10),
         mp: parseFloat($('regenMp').value),
         chain_mode: $('regenChain').checked,
-        chain_style: ($('regenChainStyle') && $('regenChainStyle').value) || 'frame',
+        chain_style: ($('regenChainStyle') && $('regenChainStyle').value) || 'frame_story',
         save_to_project: $('regenSaveProject').checked,
       }),
     });
