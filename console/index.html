@@ -413,13 +413,13 @@
       <div class="row">
         <label style="font-size:13px"><input type="checkbox" id="chainMode"> 🔗 链式衔接（上段末帧 → 下段首帧）</label>
         <label id="chainStyleWrap" style="font-size:13px;display:none">衔接方式
-          <select id="chainStyle" style="width:260px">
-            <option value="frame_story" selected>末帧硬接 + 分镜过程参考（推荐）</option>
-            <option value="frame">仅末帧衔接（原版·不用分镜）</option>
+          <select id="chainStyle" style="width:300px">
+            <option value="frame_story" selected>I2V硬接 + 分镜写入提示词（推荐）</option>
+            <option value="frame">仅末帧 I2V（不用分镜提示）</option>
           </select>
         </label>
         <div class="hint" style="font-size:11px;margin:2px 0 8px 0;width:100%">
-          链式 = 下一段第 1 帧必须等于上一段最后一帧。推荐「末帧硬接+分镜」：接戏锁死，中间按本段分镜和提示词自然往下演（分镜不当首帧、也不当收尾定格）。
+          链式下一段用 I2V：第 1 帧 = 上一段最后一帧（硬接）。推荐项会把本段分镜写进提示词引导中间怎么演，分镜图不再当参考图抢戏（避免首帧对不上）。
         </div>
         <label style="font-size:13px"><input type="checkbox" id="qualityMode" checked> 🎧 成片质量（无加速LoRA·20步，声音清晰，慢）</label>
         <label style="font-size:13px">步数
@@ -716,9 +716,9 @@
       🔗 链式衔接（用上一段末帧接本段首帧，保证画面连续）
     </label>
     <label class="field" id="regenChainStyleWrap" style="margin:0 0 8px 26px;display:none">衔接方式
-      <select id="regenChainStyle" style="width:260px">
-        <option value="frame_story" selected>末帧硬接 + 分镜过程参考</option>
-        <option value="frame">仅末帧衔接（不用分镜）</option>
+      <select id="regenChainStyle" style="width:300px">
+        <option value="frame_story" selected>I2V硬接 + 分镜写入提示词</option>
+        <option value="frame">仅末帧 I2V</option>
       </select>
     </label>
     <div class="hint" style="font-size:11px;color:var(--muted);margin:-2px 0 8px 26px">
