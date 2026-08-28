@@ -147,6 +147,7 @@
   .pill.queued { background: #eef2f8; color: var(--muted); }
   .pill.waiting { background: rgba(245,158,11,.12); color: var(--yellow); }
   .pill.running { background: rgba(79,124,255,.12); color: var(--blue); }
+  .pill.paused { background: rgba(100,116,139,.15); color: #64748b; }
   .pill.completed { background: rgba(34,197,94,.12); color: var(--green); }
   .pill.error { background: rgba(239,68,68,.12); color: var(--red); }
   .spin { width: 14px; height: 14px; border: 2px solid rgba(79,124,255,.25); border-top-color: var(--blue); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
@@ -408,11 +409,17 @@
   <section class="panel" id="panel-7">
     <div class="card">
       <h2>提交生成 <span class="step-tag">第 7 步</span></h2>
-      <div class="desc">勾选链式衔接则上段末帧自动接下一段首帧；提交后实时监控。</div>
+      <div class="desc">勾选链式衔接则上段末帧自动接下一段首帧；可用停止/从断点继续，不会覆盖已完成视频。</div>
       <div class="row">
         <label style="font-size:13px"><input type="checkbox" id="chainMode"> 🔗 链式衔接（上段末帧 → 下段首帧）</label>
+        <label id="chainStyleWrap" style="font-size:13px;display:none">衔接方式
+          <select id="chainStyle" style="width:220px">
+            <option value="frame" selected>仅末帧衔接（原版·更连贯）</option>
+            <option value="frame_story">末帧 + 分镜（兼顾构图）</option>
+          </select>
+        </label>
         <div class="hint" style="font-size:11px;margin:2px 0 8px 0;width:100%">
-          ⚠️ 连续剧情**中间段必须**承接上一段末帧，否则人物/场景会跳变。多段时默认勾选（第 2 段起自动用上段末帧接本段首帧）；每段独立场景的短剧可取消。
+          连续剧情建议勾选链式。衔接方式：仅末帧=画面更顺；末帧+分镜=顺的同时参考本段分镜构图。不勾链式则每段独立 R2V+分镜。
         </div>
         <label style="font-size:13px"><input type="checkbox" id="qualityMode" checked> 🎧 成片质量（无加速LoRA·20步，声音清晰，慢）</label>
         <label style="font-size:13px">步数
@@ -437,8 +444,11 @@
         <button class="btn" id="btnApplyMp">一键应用到全部段</button>
         <span style="flex:1"></span>
         <button class="btn primary" id="btnSubmit">🚀 提交任务</button>
+        <button class="btn" style="color:var(--red)" id="btnStopGen">⏹ 停止</button>
+        <button class="btn green" id="btnResumeChain">▶ 从断点继续</button>
         <button class="btn" id="btnRefreshStatus">刷新</button>
       </div>
+      <div class="hint" id="chainPauseHint" style="display:none;color:var(--red);margin:4px 0 8px"></div>
       <div id="statusCards"><div class="empty"><div class="big">🎬</div>提交后这里实时显示每段状态</div></div>
       <div class="card" style="margin-top:18px;box-shadow:none;background:#f8fafc">
         <h2 style="font-size:15px">🎬 合成完整视频</h2>
@@ -705,6 +715,12 @@
       <input type="checkbox" id="regenChain" style="width:auto">
       🔗 链式衔接（用上一段末帧接本段首帧，保证画面连续）
     </label>
+    <label class="field" id="regenChainStyleWrap" style="margin:0 0 8px 26px;display:none">衔接方式
+      <select id="regenChainStyle" style="width:220px">
+        <option value="frame" selected>仅末帧衔接（原版）</option>
+        <option value="frame_story">末帧 + 分镜</option>
+      </select>
+    </label>
     <div class="hint" style="font-size:11px;color:var(--muted);margin:-2px 0 8px 26px">
       除第一段外自动勾选；第一段没有上一段，无需链式
     </div>
@@ -896,6 +912,7 @@ function autoSaveProject(silent) {
         role_images: [$('roleImage1').value, $('roleImage2').value].filter(Boolean),
         scene_image: $('sceneImage').value || null,
         chain_mode: $('chainMode').checked,
+        chain_style: ($('chainStyle') && $('chainStyle').value) || 'frame',
         asset_imgs: assetImgs,
         asset_prompts: assetPrompts,
         asset_meta: assetMeta,
@@ -1330,24 +1347,56 @@ const MAX_REF_IMAGES = 8;  // 与 config.json console.max_ref_images 对齐（�
 function effectiveRefs(i) {
   // 提交时实际参考图（官方 Ref2VA 语义）：
   // 顺序 = 本段出场角色多视图（正→脸→侧→背）→ 场景图 → 分镜图（故事板，非首帧）→ 手动补充。
-  // 分镜图不再当首帧；链式段（第 2 段起）走 I2V，只带上段末帧。
+  // 分镜/场景优先占座：坑位不够时先砍角色的背/侧视图，绝不挤掉分镜图。
   const roles = (currentScript && currentScript.role_list) || [];
   const sb = (currentScript && currentScript.storyboard_list) || [];
   const seg = sb[i] || {};
   const segRoles = new Set((seg.roles || []).map(String));
-  const refs = [];
-  const push = (p) => { if (p && !refs.includes(p)) refs.push(p); };
+  const story = assetImgs.story[i] || '';
+  const scene = (seg.scene && assetImgs.scene[seg.scene]) ? assetImgs.scene[seg.scene] : '';
+  const manuals = [$('roleImage1').value, $('roleImage2').value, $('sceneImage').value].filter(Boolean);
+
+  // 角色视图：带优先级，挤位时先扔 back/side，尽量留 front/face
+  const roleItems = [];
+  const viewPri = { front: 0, face: 1, side: 2, back: 3 };
   roles.forEach(r => {
     const n = r.role_name || r.name;
     if (!n) return;
-    if (segRoles.size && !segRoles.has(n)) return;  // 只带本段出场角色
+    if (segRoles.size && !segRoles.has(n)) return;
     const views = ((assetImgs.roleViews && assetImgs.roleViews[n]) || {});
-    ['front', 'face', 'side', 'back'].forEach(v => { if (views[v]) push(views[v]); });
-    if (!views.front && assetImgs.role[n]) push(assetImgs.role[n]);  // 旧项目兜底
+    let any = false;
+    ['front', 'face', 'side', 'back'].forEach(v => {
+      if (views[v]) { roleItems.push({ path: views[v], pri: viewPri[v] }); any = true; }
+    });
+    if (!any && assetImgs.role[n]) roleItems.push({ path: assetImgs.role[n], pri: 0 });
   });
-  if (seg.scene && assetImgs.scene[seg.scene]) push(assetImgs.scene[seg.scene]);
-  if (assetImgs.story[i]) push(assetImgs.story[i]);
-  [$('roleImage1').value, $('roleImage2').value, $('sceneImage').value].forEach(v => { if (v) push(v); });
+
+  // 先给分镜、场景留座，剩下的坑给角色视图
+  let seatLeft = MAX_REF_IMAGES;
+  if (story) seatLeft -= 1;
+  if (scene && scene !== story) seatLeft -= 1;
+  seatLeft = Math.max(0, seatLeft);
+
+  const keepRole = new Set();
+  [...roleItems].sort((a, b) => a.pri - b.pri).forEach(it => {
+    if (keepRole.size >= seatLeft) return;
+    if (it.path && it.path !== story && it.path !== scene) keepRole.add(it.path);
+  });
+
+  const refs = [];
+  const push = (p) => { if (p && !refs.includes(p)) refs.push(p); };
+  roleItems.forEach(it => { if (keepRole.has(it.path)) push(it.path); });
+  if (scene) push(scene);
+  if (story) push(story);
+  manuals.forEach(v => {
+    if (refs.length >= MAX_REF_IMAGES) return;
+    push(v);
+  });
+  // 最后再保证分镜一定在列表里（防御：手动项把坑占满时）
+  if (story && !refs.includes(story)) {
+    if (refs.length >= MAX_REF_IMAGES) refs.pop();
+    refs.push(story);
+  }
   return refs.slice(0, MAX_REF_IMAGES);
 }
 
@@ -1356,15 +1405,11 @@ async function submit() {
   let tasks = collectPromptTasks();
   tasks = tasks.filter(t => t.prompt);
   if (!tasks.length) { toast('没有可提交的任务（请先在第 4 步生成提示词）', true); return; }
-  // 多段连续剧情默认勾选链式衔接（每段独立场景可手动取消）
-  if (tasks.length > 1 && !$('chainMode').checked) {
-    $('chainMode').checked = true;
-    toast('连续剧情已自动勾选链式衔接（上段末帧 → 下段首帧）');
-  }
   // 一键分辨率覆盖
   const globalMp = $('submitMp').value;
   if (globalMp) tasks = tasks.map(t => ({...t, mp: parseFloat(globalMp)}));
   // 按参考资产自动定模式：角色/场景/分镜图 ≥2 → R2V；1 张 → I2V；无 → T2V
+  // 注意：不再自动强制勾选链式，由用户自己决定
   tasks = tasks.map((t, i) => {
     const refs = effectiveRefs(i);
     t.story_image = assetImgs.story[i] || '';
@@ -1394,6 +1439,7 @@ async function submit() {
         server: $('serverInput').value.trim(), tasks,
         auto_download: $('autoDownload').checked,
         chain_mode: $('chainMode').checked,
+        chain_style: ($('chainStyle') && $('chainStyle').value) || 'frame',
         role_images: [$('roleImage1').value, $('roleImage2').value].filter(Boolean),
         scene_image: $('sceneImage').value || null,
       }),
@@ -1414,7 +1460,7 @@ let statusTasksCache = [];
 let statusPage = 0;
 const statusPageSize = 12;
 function pill(status) {
-  const map = {queued: '排队中', running: '生成中', completed: '已完成', error: '失败', waiting: '等待上段'};
+  const map = {queued: '排队中', running: '生成中', completed: '已完成', error: '失败', waiting: '等待上段', paused: '已停止'};
   return `<span class="pill ${status}">${map[status] || status}</span>`;
 }
 function fmtDur(sec) { if (sec == null) return '—'; return `${Math.floor(sec/60)}分${String(sec%60).padStart(2,'0')}秒`; }
@@ -1427,6 +1473,16 @@ async function refreshStatus() {
     if (!d.server_ok) { $('statusCards').innerHTML = '<div class="empty">⚠️ 服务器连接异常</div>'; return; }
     if (!d.tasks.length) { $('statusCards').innerHTML = '<div class="empty"><div class="big">🎬</div>还没有任务，提交后这里显示状态</div>'; return; }
     statusTasksCache = d.tasks;
+    const hint = $('chainPauseHint');
+    if (hint) {
+      if (d.chain_paused) {
+        hint.style.display = '';
+        hint.textContent = '⏹ 已停止：' + (d.chain_pause_reason || '生成已暂停') + '。点「从断点继续」可接着跑，不会覆盖已完成段。';
+      } else {
+        hint.style.display = 'none';
+        hint.textContent = '';
+      }
+    }
     renderStatusCards();
   } catch (e) { $('statusCards').innerHTML = '<div class="empty">状态刷新失败</div>'; }
 }
@@ -1779,6 +1835,8 @@ async function regenerateVideo(taskId) {
       (t.name || '') === (s.name || '') || (t.name || '').startsWith((s.name || '') + '_'));
     $('regenChain').disabled = segIdx <= 0;
     $('regenChain').checked = segIdx > 0;
+    if ($('regenChainStyle') && $('chainStyle')) $('regenChainStyle').value = $('chainStyle').value || 'frame';
+    if ($('regenChainStyleWrap')) $('regenChainStyleWrap').style.display = (segIdx > 0) ? '' : 'none';
     $('regenModalBg').style.display = 'flex';
   } catch (e) { toast('加载任务详情失败：' + e.message, true); }
 }
@@ -1796,6 +1854,7 @@ async function regenSubmit() {
         steps: parseInt($('regenSteps').value, 10),
         mp: parseFloat($('regenMp').value),
         chain_mode: $('regenChain').checked,
+        chain_style: ($('regenChainStyle') && $('regenChainStyle').value) || 'frame',
         save_to_project: $('regenSaveProject').checked,
       }),
     });
@@ -1849,6 +1908,41 @@ async function clearHistory() {
   const d = await r.json();
   toast(`已清空，剩余 ${d.remaining} 条`);
   refreshStatus();
+}
+
+async function stopGeneration() {
+  if (!confirm('确定停止当前生成？\n\n会打断云端任务并停止自动续接。\n已完成的视频会保留，之后可「从断点继续」。')) return;
+  const btn = $('btnStopGen');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/stop', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ server: $('serverInput').value.trim() }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.ok === false) { toast(d.error || d.message || '停止失败', true); return; }
+    toast(d.message || '已停止');
+    refreshStatus();
+  } catch (e) { toast('停止异常：' + e.message, true); }
+  finally { btn.disabled = false; }
+}
+
+async function resumeChain() {
+  if (!confirm('从断点继续？\n\n会从最新批次「最后一个已完成段」往后接着跑，\n不会覆盖已经生成好的视频。')) return;
+  const btn = $('btnResumeChain');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/resume_chain', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ server: $('serverInput').value.trim() }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.ok === false) { toast(d.error || d.message || '继续失败', true); return; }
+    toast(d.message || '已从断点继续');
+    refreshStatus();
+    startPoll();
+  } catch (e) { toast('继续异常：' + e.message, true); }
+  finally { btn.disabled = false; }
 }
 
 // ---------- 设置 ----------
@@ -2048,8 +2142,7 @@ async function loadProject() {
     if (p.prompt_tasks && p.prompt_tasks.length) {
       promptTasks = p.prompt_tasks;
       renderPromptCards();
-      // 多段连续剧情：提交时默认勾选链式衔接（每段独立场景可手动取消）
-      if (p.prompt_tasks.length > 1) $('chainMode').checked = true;
+      // 不再自动勾选链式，保留用户上次手动选择
     }
     if (p.asset_imgs) assetImgs = p.asset_imgs;
     // 老项目兼容：正面锚点图没登记进四视图槽时自动补登（roleViews.front）
@@ -2103,6 +2196,13 @@ function applyProjectSelections() {
     $('sceneImage').value = p.scene_image;
   }
   if (typeof p.chain_mode === 'boolean') $('chainMode').checked = p.chain_mode;
+  if (p.chain_style && $('chainStyle')) $('chainStyle').value = p.chain_style;
+  syncChainStyleUI();
+}
+
+function syncChainStyleUI() {
+  const on = $('chainMode') && $('chainMode').checked;
+  if ($('chainStyleWrap')) $('chainStyleWrap').style.display = on ? '' : 'none';
 }
 
 // ---------- ⑤ 参考资产 ----------
@@ -2814,6 +2914,8 @@ $('btnRewrite').addEventListener('click', rewriteScript);
 $('btnConfirmScript').addEventListener('click', confirmScript);
 $('btnBuildPrompts').addEventListener('click', buildPrompts);
 $('btnSubmit').addEventListener('click', submit);
+$('btnStopGen').addEventListener('click', stopGeneration);
+$('btnResumeChain').addEventListener('click', resumeChain);
 $('btnRefreshStatus').addEventListener('click', refreshStatus);
 $('btnApplyMp').addEventListener('click', applyMpAll);
 $('btnAssemble').addEventListener('click', assemble);
@@ -2847,7 +2949,14 @@ $('regenModalBg').addEventListener('click', e => { if (e.target === $('regenModa
 ['roleImage1', 'roleImage2', 'sceneImage'].forEach(id => {
   $(id).addEventListener('change', () => autoSaveProject(true));
 });
-$('chainMode').addEventListener('change', () => autoSaveProject(true));
+$('chainMode').addEventListener('change', () => {
+  syncChainStyleUI();
+  autoSaveProject(true);
+});
+if ($('chainStyle')) $('chainStyle').addEventListener('change', () => autoSaveProject(true));
+if ($('regenChain')) $('regenChain').addEventListener('change', () => {
+  if ($('regenChainStyleWrap')) $('regenChainStyleWrap').style.display = $('regenChain').checked ? '' : 'none';
+});
 $('qualityMode').addEventListener('change', () => {
   $('stepsMode').value = $('qualityMode').checked ? '20' : '4';
   autoSaveProject(true);

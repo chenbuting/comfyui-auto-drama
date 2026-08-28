@@ -17,6 +17,7 @@ import io
 import json
 import math
 import os
+import platform
 import random
 import re
 import shutil
@@ -26,6 +27,7 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -33,6 +35,16 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Windows 下隐藏 ffmpeg 子进程控制台窗口（链式抽帧/合成时避免黑窗闪烁）
+_SUBPROC_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
+
+def _run_cmd(cmd, **kwargs):
+    """运行外部命令；Windows 下不弹出 ffmpeg 黑窗口。"""
+    if _SUBPROC_FLAGS:
+        kwargs.setdefault("creationflags", _SUBPROC_FLAGS)
+    return subprocess.run(cmd, **kwargs)
 PROJECT_ROOT = os.path.dirname(BASE_DIR)  # 项目根（config.json 所在目录）
 STATE_FILE = os.path.join(BASE_DIR, "batch_state.json")
 DB_FILE = os.path.join(BASE_DIR, "console.db")
@@ -167,8 +179,12 @@ def api_post(server, path, payload, timeout=30):
         server + path, data=data, method="POST",
         headers={"Content-Type": "application/json", "User-Agent": "batch-console"},
     )
-    with _opener().open(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+    try:
+        with _opener().open(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP Error {e.code}: {body[:800]}") from e
 
 
 def upload_image(server, local_path, filename):
@@ -333,7 +349,7 @@ def detect_lead_noise_sec(video_path):
     try:
         tmp = tempfile.mkdtemp(prefix="lead_")
         wav = os.path.join(tmp, "lead.wav")
-        r = subprocess.run(
+        r = _run_cmd(
             ["ffmpeg", "-y", "-v", "quiet", "-i", video_path, "-t", "1",
              "-vn", "-ac", "1", "-ar", "16000", wav],
             capture_output=True,
@@ -459,7 +475,7 @@ def assemble_project_video(project_name="", selection=None, seg_range=None, prog
             cut = detect_lead_noise_sec(tmp_src)
             if cut > 0:
                 # 裁剪开头起始音节：音画同步 trim，保留台词前的间隙
-                r = subprocess.run(
+                r = _run_cmd(
                     ["ffmpeg", "-y", "-i", tmp_src,
                      "-vf", f"trim=start={cut},setpts=PTS-STARTPTS",
                      "-af", f"atrim=start={cut},asetpts=PTS-STARTPTS",
@@ -472,7 +488,7 @@ def assemble_project_video(project_name="", selection=None, seg_range=None, prog
                     norm_segs.append(seg)
                     continue
             # 无前置音节或裁剪失败：正常转码
-            r = subprocess.run(
+            r = _run_cmd(
                 ["ffmpeg", "-y", "-i", tmp_src, "-c:v", "libx264", "-preset", "fast",
                  "-crf", "20", "-c:a", "aac", "-ar", "44100", "-pix_fmt", "yuv420p", seg],
                 capture_output=True,
@@ -494,7 +510,7 @@ def assemble_project_video(project_name="", selection=None, seg_range=None, prog
         base = _slug(project_name or "项目") or "project"
         outname = f"合成_{base}{seg_label}_{int(time.time())}.mp4"
         dest = os.path.join(IMAGE_DIRS[0], outname)
-        r = subprocess.run(
+        r = _run_cmd(
             ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", dest],
             capture_output=True,
         )
@@ -1005,7 +1021,7 @@ def extract_last_frame(video_path):
     tmp_video = os.path.join(tmpdir, "in.mp4")
     out_png = os.path.join(tmpdir, "last.png")
     shutil.copy(video_path, tmp_video)
-    r = subprocess.run(
+    r = _run_cmd(
         ["ffmpeg", "-y", "-sseof", "-0.1", "-i", tmp_video, "-frames:v", "1", out_png],
         capture_output=True,
     )
@@ -1014,14 +1030,32 @@ def extract_last_frame(video_path):
     return out_png
 
 
-def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None):
+def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None, chain_style="frame"):
     warnings = []
+    # chain_style: frame=仅末帧I2V（原版）；frame_story=末帧+分镜 R2V
+    chain_style = str(chain_style or "frame").strip() or "frame"
+    if chain_style not in ("frame", "frame_story"):
+        chain_style = "frame"
     # R2V 任务：三段式 → 官方六段式（仅本次会直接提交的段；链式等待段保持三段式，
-    # 后续由 advance_chain 转 I2V 使用）
+    # 后续由 advance_chain 按 chain_style 转 I2V 或 R2V）
     for idx, t in enumerate(tasks):
-        if t.get("mode") == "r2v" and (t.get("images") or []):
+        t["chain_style"] = chain_style
+        if t.get("mode") == "r2v" and (t.get("images") or t.get("story_image")):
+            # 分镜必须进 images，否则六段式提示词不会引用分镜图
+            imgs = [x for x in (t.get("images") or []) if x]
+            story = str(t.get("story_image") or "").strip()
+            if story and story not in imgs:
+                max_n = 8
+                try:
+                    max_n = int((_CONFIG.get("console") or {}).get("max_ref_images") or 8)
+                except Exception:
+                    max_n = 8
+                if len(imgs) >= max_n:
+                    imgs = imgs[: max_n - 1]
+                imgs.append(story)
+                t["images"] = imgs
             is_waiting = bool(t.get("chain_waiting")) or (bool(chain_mode) and idx > 0)
-            if not is_waiting:
+            if not is_waiting and (t.get("images") or []):
                 t["prompt"] = to_ref2va_six_section(t.get("prompt", ""), t)
     # R2V 模型预检：ref2va 权重缺失时回退 fl2va_pruned 并提示
     r2v_cfg = (_CONFIG.get("models") or {}).get("r2v") or {}
@@ -1148,9 +1182,7 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
         ]
         if stale_same:
             state["tasks"] = [x for x in state["tasks"] if x not in stale_same]
-        is_chain_waiting = bool(task.get("chain_waiting")) or (
-            bool(chain_mode) and (idx > 0 or has_open_chain)
-        )
+        is_chain_waiting = bool(task.get("chain_waiting")) or (bool(chain_mode) and idx > 0)
         # 链式引用：同一批内严格接"本批上一段的新版本"，不落到旧版本
         chain_prev_ref = prev_new_tid if (bool(chain_mode) and idx > 0 and prev_new_tid) else task.get("chain_prev")
         if not is_chain_waiting:
@@ -1193,9 +1225,11 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
             "chain_prev": chain_prev_ref
             or (state["tasks"][-1]["id"] if (chain_mode and idx > 0 and state["tasks"]) else None),
             "chain_done": False,
+            "chain_style": chain_style,
         })
         results.append({"id": base_tid, "ok": True, "task_id": tid, "prompt_id": pid, "waiting": is_chain_waiting})
         prev_new_tid = tid
+    state["chain_style"] = chain_style
     save_state(state)
     return results, None, warnings
 
@@ -1314,6 +1348,17 @@ def get_status(server):
     changed = False
     for t in tasks:
         pid = t.get("prompt_id")
+        # 用户停止后的未完成段：显示为「已停止」
+        if t.get("paused_by_user") and not (t.get("downloaded") or t.get("output_file")) and not pid:
+            out.append({
+                "id": t["id"], "name": t.get("name", t["id"]), "mode": t.get("mode"),
+                "duration": t.get("duration"), "mp": t.get("mp"), "prompt_id": None,
+                "status": "paused", "elapsed_sec": None, "outputs": [],
+                "error": "已停止（可点「从断点继续」）", "downloaded": False,
+                "submitted_at": t.get("submitted_at", ""),
+                "failure_code": t.get("failure_code"),
+            })
+            continue
         if t.get("chain_waiting") and not pid:
             out.append({
                 "id": t["id"], "name": t.get("name", t["id"]), "mode": t.get("mode"),
@@ -1406,24 +1451,36 @@ def get_status(server):
             except Exception:
                 pass
         out.append(item)
-    changed = advance_chain(server, state) or changed
+    # 用户手动停止后，禁止自动链式推进
+    cc = state.get("chain_control") or {}
+    if not cc.get("paused"):
+        changed = advance_chain(server, state) or changed
     if changed:
         save_state(state)
-    # 排序：进行中的任务置顶（running > queued > waiting > completed > error），
-    # 同状态下最新提交的在前（前端刷新即可看到新任务在最上方）
+    # 排序：进行中的任务置顶（running > queued > waiting > paused > completed > error）
     def _status_rank(s):
-        return {"running": 0, "queued": 1, "waiting": 2, "completed": 3, "error": 4}.get(s, 5)
+        return {"running": 0, "queued": 1, "waiting": 2, "paused": 3, "completed": 4, "error": 5}.get(s, 6)
     out.sort(key=lambda x: str(x.get("submitted_at") or ""), reverse=True)
     out.sort(key=lambda x: _status_rank(x.get("status")))
-    return {"server_ok": True, "tasks": out}
+    return {
+        "server_ok": True,
+        "tasks": out,
+        "chain_paused": bool(cc.get("paused")),
+        "chain_pause_reason": cc.get("pause_reason") or "",
+    }
 
 
 def advance_chain(server, state):
     """链式衔接：上一段完成并下载后，抽最后一帧上传，提交下一段。"""
+    cc = state.get("chain_control") or {}
+    if cc.get("paused"):
+        return False
     tasks = state.get("tasks", [])
     changed = False
     by_id = {t.get("id"): t for t in tasks}
     for i, nxt in enumerate(tasks):
+        if nxt.get("paused_by_user"):
+            continue
         if not nxt.get("chain_waiting") or nxt.get("prompt_id"):
             continue
         # 按 chain_prev 找上一段（支持重新生成指定上一段）；无则取列表前一个
@@ -1531,26 +1588,53 @@ def advance_chain(server, state):
         except Exception as e:
             print(f"[chain] 上传失败：{e}")
             continue
-        # 下一段：链式参考图 = 上段末帧（P1，首帧对齐）+ 本段场景 + 角色锚点。
-        # 去掉分镜图：分镜图场景可能与上段末帧不同，混在一起会让 H3 生成场景切换
+        # 链式方式：frame=仅末帧 I2V；frame_story=末帧+分镜 R2V（用户可选）
+        chain_style = (
+            str(nxt.get("chain_style") or state.get("chain_style") or "frame").strip()
+            or "frame"
+        )
+        use_story = chain_style == "frame_story"
+        story = str(nxt.get("story_image") or "").strip()
         base_refs = [x for x in (nxt.get("images") or []) if x and not str(x).startswith("chain_")]
-        ref_imgs = [x for x in base_refs if not (str(x).startswith("分镜_") or str(x).startswith("story_"))]
-        ref_imgs = list(dict.fromkeys(ref_imgs[:3]))
-        if chain_img not in ref_imgs:
-            ref_imgs.insert(0, chain_img)  # 链帧放第一位：首帧对齐 + 构图延续
-        # 链式提示词：首帧延续上一段末帧，整段保持单一场景
+        if use_story:
+            # 末帧 + 分镜 + 角色/场景锚点（去掉重复分镜名）
+            ref_imgs = [chain_img]
+            if not story:
+                for x in base_refs:
+                    if str(x).startswith("分镜_") or str(x).startswith("story_"):
+                        story = x
+                        break
+            if story:
+                ref_imgs.append(story)
+            for x in base_refs:
+                if x in ref_imgs:
+                    continue
+                if str(x).startswith("分镜_") or str(x).startswith("story_"):
+                    continue
+                ref_imgs.append(x)
+            ref_imgs = list(dict.fromkeys(ref_imgs))[:8]
+        else:
+            # 原版：去掉分镜，只用末帧 + 少量锚点，走 I2V
+            ref_imgs = [x for x in base_refs if not (str(x).startswith("分镜_") or str(x).startswith("story_"))]
+            ref_imgs = list(dict.fromkeys(ref_imgs[:3]))
+            if chain_img not in ref_imgs:
+                ref_imgs.insert(0, chain_img)
+        # 链式提示词：首帧延续上一段末帧
         chain_prompt = str(nxt.get("prompt") or "")
         if chain_prompt and "不切换场景" not in chain_prompt:
-            chain_prompt = (
-                " 首帧严格延续上一段末帧的场景、人物位置与光线；"
-                "整段画面保持单一场景，不出现场景切换、不出现其他地点。"
-            ).join([chain_prompt, ""]) if False else chain_prompt + (
+            chain_prompt = chain_prompt + (
                 " 首帧严格延续上一段末帧的场景、人物位置与光线；"
                 "整段画面保持单一场景，不出现场景切换、不出现其他地点。"
             )
-        # 关键：waiting 任务从未提交过，其参考图（锚点/场景/分镜）还没上传到远程，
-        # 必须在上传链帧之外把所有本地参考图也上传，否则 POST /prompt 会 400
+        if use_story and story and "分镜图" not in chain_prompt:
+            chain_prompt = chain_prompt + (
+                " 本镜机位、景别、构图与人物站位参考分镜图；"
+                "动作与对白按本段提示词，外貌与服装保持角色锚点一致。"
+            )
+        # waiting 任务参考图可能还没上传
         for img in ref_imgs:
+            if img == chain_img:
+                continue
             lp = find_image(img)
             if lp:
                 try:
@@ -1563,24 +1647,50 @@ def advance_chain(server, state):
         except Exception as e:
             print(f"[chain] 加载 build_api_graphs 失败：{e}")
             continue
-        # 链式衔接统一用 I2V：上段末帧作为本段首帧图，画面从上帧直接发展（最连贯）。
-        # R2V 多参考下 H3 不保证从链帧开始，段间会跳变。
-        task = {
-            "id": nxt["id"],
-            "name": nxt.get("name", nxt["id"]),
-            "mode": "i2v",
-            "prompt": ensure_i2v_prompt(chain_prompt),
-            "quality": nxt.get("quality"),
-            "steps": nxt.get("steps"),
-            "duration": nxt.get("duration", 10),
-            "mp": nxt.get("mp", 1.0),
-            "prefix": nxt.get("prefix", ""),
-            "image": chain_img,
-            "story_image": nxt.get("story_image"),
-            "ref_video": nxt.get("ref_video"),
-            "seed": random.randrange(10 ** 15),
-        }
-        build_fn = bg.build_i2v
+        if use_story:
+            # 末帧+分镜：R2V，链帧在 images 首位 → 六段式里声明为首帧
+            r2v_cfg = (_CONFIG.get("models") or {}).get("r2v") or {}
+            task = {
+                "id": nxt["id"],
+                "name": nxt.get("name", nxt["id"]),
+                "mode": "r2v",
+                "prompt": chain_prompt,
+                "quality": nxt.get("quality"),
+                "steps": nxt.get("steps"),
+                "duration": nxt.get("duration", 10),
+                "mp": nxt.get("mp", 1.0),
+                "prefix": nxt.get("prefix", ""),
+                "images": ref_imgs,
+                "story_image": story or nxt.get("story_image"),
+                "ref_video": nxt.get("ref_video"),
+                "seed": random.randrange(10 ** 15),
+                "r2v_unet": nxt.get("r2v_unet") or r2v_cfg.get("unet"),
+                "r2v_clip": nxt.get("r2v_clip") or r2v_cfg.get("clip"),
+                "roles": nxt.get("roles"),
+                "scene": nxt.get("scene"),
+            }
+            task["prompt"] = to_ref2va_six_section(task["prompt"], task)
+            build_fn = bg.build_r2v
+            submit_mode = "r2v"
+        else:
+            # 原版：仅末帧 I2V
+            task = {
+                "id": nxt["id"],
+                "name": nxt.get("name", nxt["id"]),
+                "mode": "i2v",
+                "prompt": ensure_i2v_prompt(chain_prompt),
+                "quality": nxt.get("quality"),
+                "steps": nxt.get("steps"),
+                "duration": nxt.get("duration", 10),
+                "mp": nxt.get("mp", 1.0),
+                "prefix": nxt.get("prefix", ""),
+                "image": chain_img,
+                "story_image": nxt.get("story_image"),
+                "ref_video": nxt.get("ref_video"),
+                "seed": random.randrange(10 ** 15),
+            }
+            build_fn = bg.build_i2v
+            submit_mode = "i2v"
         try:
             g = build_fn(task)
             resp = api_post(server, "/prompt", {"prompt": g, "client_id": "batch_console"})
@@ -1595,12 +1705,188 @@ def advance_chain(server, state):
         nxt["submitted_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
         nxt["chain_waiting"] = False
         nxt["image"] = chain_img
-        nxt["images"] = []
-        nxt["mode"] = "i2v"
+        nxt["mode"] = submit_mode
+        nxt["chain_style"] = chain_style
+        if use_story:
+            nxt["images"] = [x for x in ref_imgs if x != chain_img]
+            nxt["story_image"] = story or nxt.get("story_image")
+        else:
+            nxt["images"] = []
         t["chain_done"] = True
         changed = True
-        print(f"[chain] {t.get('name')} → {nxt.get('name')} 已提交（{pid}）")
+        print(f"[chain] {t.get('name')} → {nxt.get('name')} 已提交（{pid}，{chain_style}/{submit_mode}）")
     return changed
+
+
+def _kill_named_process(name):
+    """停止同名 Python 脚本进程（跨平台）。"""
+    if platform.system() == "Windows":
+        try:
+            subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-Command",
+                    f"Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -match '{name}\\.py' }} "
+                    f"| ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+                ],
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            pass
+        return
+    try:
+        out = subprocess.run(
+            ["pgrep", "-f", f"{name}\\.py"],
+            capture_output=True, text=True,
+        )
+        for pid in out.stdout.split():
+            try:
+                os.kill(int(pid), 15)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def _ensure_chain_daemon():
+    """确保链式守护进程在跑（从断点继续时用）。"""
+    try:
+        import start_daemons as sd
+        sd.kill_existing("chain_daemon")
+        p = sd.spawn("chain_daemon", ["chain_daemon.py"])
+        return p.pid
+    except Exception as e:
+        print(f"[chain] 启动 chain_daemon 失败：{e}")
+        return None
+
+
+def _task_version(name):
+    m = re.search(r"_v(\d+)$", str(name or ""))
+    return int(m.group(1)) if m else 0
+
+
+def _task_seg_num(name):
+    m = re.search(r"_(\d+)(?:_v\d+)?$", str(name or ""))
+    return int(m.group(1)) if m else 0
+
+
+def _task_done(t):
+    return bool(t.get("downloaded") or t.get("output_file"))
+
+
+def stop_generation(server=None):
+    """停止：打断云端 + 清空队列 + 停链式守护；已完成保留，未完成标记可续接。"""
+    server = (server or "").strip() or DEFAULT_SERVER
+    cloud = {"interrupt": None, "clear": None}
+
+    def _post_empty_ok(path, payload=None):
+        """ComfyUI /interrupt、/queue clear 常返回空 body，不能按 JSON 解析。"""
+        data = None if payload is None else json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            server + path, data=data or b"{}", method="POST",
+            headers={"Content-Type": "application/json", "User-Agent": "batch-console"},
+        )
+        try:
+            with _opener().open(req, timeout=30) as r:
+                r.read()
+                return "ok"
+        except Exception as e:
+            return str(e)
+
+    cloud["interrupt"] = _post_empty_ok("/interrupt", {})
+    cloud["clear"] = _post_empty_ok("/queue", {"clear": True})
+    _kill_named_process("chain_daemon")
+    state = load_state()
+    paused_names = []
+    for t in state.get("tasks", []):
+        if _task_done(t):
+            continue
+        for k in ("prompt_id", "submitted_at", "error", "failure_code"):
+            t.pop(k, None)
+        t["chain_waiting"] = False
+        t["paused_by_user"] = True
+        paused_names.append(t.get("name"))
+    state["chain_control"] = {
+        "paused": True,
+        "pause_reason": "用户点击停止",
+        "last_cloud_fail_at": time.time(),
+        "cloud_ok_since": 0,
+    }
+    save_state(state)
+    return {
+        "ok": True,
+        "cloud": cloud,
+        "paused_count": len(paused_names),
+        "paused_names": paused_names,
+        "message": f"已停止。未完成 {len(paused_names)} 段已暂停，已完成视频保留。可点「从断点继续」。",
+    }
+
+
+def resume_from_breakpoint(server=None):
+    """从断点继续：不覆盖已完成段，只从最新批次最后一个完成段往后续接。"""
+    server = (server or "").strip() or DEFAULT_SERVER
+    state = load_state()
+    tasks = state.get("tasks", [])
+    if not tasks:
+        return {"ok": False, "error": "没有任务可继续"}
+
+    ver = max((_task_version(t.get("name")) for t in tasks), default=0)
+    batch = [t for t in tasks if _task_version(t.get("name")) == ver]
+    batch.sort(key=lambda t: _task_seg_num(t.get("name")))
+    if not batch:
+        return {"ok": False, "error": "找不到可续接的任务批次"}
+
+    last_done_i = -1
+    for i, t in enumerate(batch):
+        if _task_done(t):
+            last_done_i = i
+    if last_done_i < 0:
+        return {"ok": False, "error": "该批次还没有已完成的段，请先点「提交任务」生成第 1 段"}
+    if last_done_i >= len(batch) - 1:
+        return {
+            "ok": True,
+            "message": "该批次已经全部完成，无需继续",
+            "done_name": batch[last_done_i].get("name"),
+        }
+
+    for i, t in enumerate(batch):
+        if i < last_done_i:
+            t["chain_done"] = True
+            t.pop("paused_by_user", None)
+        elif i == last_done_i:
+            t["chain_done"] = False
+            t.pop("paused_by_user", None)
+        else:
+            for k in ("prompt_id", "submitted_at", "error", "failure_code", "output_file", "downloaded", "recorded"):
+                t.pop(k, None)
+            t["chain_waiting"] = True
+            t["paused_by_user"] = False
+            t["chain_prev"] = batch[last_done_i].get("id")
+            if not t.get("chain_style"):
+                t["chain_style"] = state.get("chain_style") or "frame"
+
+    state["chain_control"] = {
+        "paused": False,
+        "pause_reason": "",
+        "last_cloud_fail_at": 0,
+        "cloud_ok_since": time.time(),
+    }
+    changed = advance_chain(server, state)
+    save_state(state)
+    daemon_pid = _ensure_chain_daemon()
+    nxt = batch[last_done_i + 1]
+    return {
+        "ok": True,
+        "changed": changed,
+        "from_name": batch[last_done_i].get("name"),
+        "next_name": nxt.get("name"),
+        "next_prompt_id": nxt.get("prompt_id"),
+        "daemon_pid": daemon_pid,
+        "message": (
+            f"已从 {batch[last_done_i].get('name')} 之后继续 → {nxt.get('name')}"
+            "（不覆盖已完成段）"
+        ),
+    }
 
 
 def check_server(server):
@@ -4115,12 +4401,15 @@ class Handler(BaseHTTPRequestHandler):
             tasks = body.get("tasks", [])
             auto = bool(body.get("auto_download", True))
             chain = bool(body.get("chain_mode", False))
+            chain_style = body.get("chain_style") or "frame"
             role_images = body.get("role_images") or []
             scene_image = body.get("scene_image") or None
             if not tasks:
                 self._send(400, json.dumps({"error": "没有任务"}, ensure_ascii=False))
                 return
-            results, err, warnings = submit_tasks(server, tasks, auto, chain, role_images, scene_image)
+            results, err, warnings = submit_tasks(
+                server, tasks, auto, chain, role_images, scene_image, chain_style=chain_style
+            )
             if err:
                 self._send(400, json.dumps({"error": err}, ensure_ascii=False))
             else:
@@ -4140,6 +4429,7 @@ class Handler(BaseHTTPRequestHandler):
                             "ok": sum(1 for r in results if r.get("ok")),
                             "total": len(results),
                             "chain_mode": bool(chain),
+                            "chain_style": str(chain_style or "frame"),
                             "shots": [
                                 {
                                     "name": str(t.get("name") or ""),
@@ -4333,7 +4623,7 @@ class Handler(BaseHTTPRequestHandler):
                     if body.get(k) is not None:
                         proj[k] = str(body.get(k) or "")
                 for k in ("script_before", "script_after", "current_script", "prompt_tasks",
-                          "role_images", "scene_image", "chain_mode",
+                          "role_images", "scene_image", "chain_mode", "chain_style",
                           "asset_imgs", "asset_prompts", "asset_meta",
                           "asset_state", "generation_log"):
                     if k in body:
@@ -4559,7 +4849,7 @@ class Handler(BaseHTTPRequestHandler):
                 segs = []
                 for i, src in enumerate(srcs):
                     seg = os.path.join(tmpdir, f"seg_{i}.mp4")
-                    r = subprocess.run(
+                    r = _run_cmd(
                         ["ffmpeg", "-y", "-i", src, "-c:v", "libx264", "-preset", "fast",
                          "-crf", "20", "-c:a", "aac", "-ar", "44100", "-pix_fmt", "yuv420p", seg],
                         capture_output=True,
@@ -4571,7 +4861,7 @@ class Handler(BaseHTTPRequestHandler):
                 with open(listfile, "w", encoding="utf-8") as f:
                     for p in segs:
                         f.write(f"file '{p.replace(os.sep, '/')}'\n")
-                r = subprocess.run(
+                r = _run_cmd(
                     ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", dest],
                     capture_output=True,
                 )
@@ -4601,6 +4891,19 @@ class Handler(BaseHTTPRequestHandler):
             keep = body.get("keep") or None
             n = clear_history(keep)
             self._send(200, json.dumps({"cleared": True, "remaining": n}, ensure_ascii=False))
+            return
+        if path == "/api/stop":
+            # 停止生成：打断云端 + 停链式；已完成保留，可从断点继续
+            server = body.get("server") or DEFAULT_SERVER
+            result = stop_generation(server)
+            self._send(200, json.dumps(result, ensure_ascii=False))
+            return
+        if path == "/api/resume_chain":
+            # 从断点继续：不覆盖已完成段
+            server = body.get("server") or DEFAULT_SERVER
+            result = resume_from_breakpoint(server)
+            code = 200 if result.get("ok") else 400
+            self._send(code, json.dumps(result, ensure_ascii=False))
             return
         if path == "/api/delete_video":
             """删除某任务：视频文件（如有）一并删除，并移除任务记录（失败/丢失任务也可删）。"""
@@ -4708,9 +5011,11 @@ class Handler(BaseHTTPRequestHandler):
                         st2["projects"] = projects2
                     save_state(st2)
             server = st.get("server") or DEFAULT_SERVER
-            results, err = submit_tasks(
+            cs = str(body.get("chain_style") or t.get("chain_style") or st.get("chain_style") or "frame")
+            results, err, _warn = submit_tasks(
                 server, [new_task], auto_download=True,
                 chain_mode=bool(body.get("chain_mode")),
+                chain_style=cs,
             )
             if err:
                 self._send(400, json.dumps({"error": err}, ensure_ascii=False))

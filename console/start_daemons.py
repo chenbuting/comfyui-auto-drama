@@ -16,6 +16,15 @@ import platform
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable
+FFMPEG_BIN = r"E:\AIDATA\tools\ffmpeg\ffmpeg-9.0.1-essentials_build\bin"
+
+
+def _child_env():
+    """子进程环境：确保 ffmpeg 在 PATH 中（Windows 链式抽帧依赖）。"""
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    if os.path.isdir(FFMPEG_BIN):
+        env["PATH"] = FFMPEG_BIN + os.pathsep + env.get("PATH", "")
+    return env
 
 
 def spawn(name, args):
@@ -30,7 +39,7 @@ def spawn(name, args):
             stdout=log,
             stderr=err,
             creationflags=creationflags,
-            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            env=_child_env(),
         )
         return p
     p = subprocess.Popen(
@@ -40,13 +49,26 @@ def spawn(name, args):
         stdout=log,
         stderr=err,
         start_new_session=True,  # setsid：脱离当前会话
-        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+        env=_child_env(),
     )
     return p
 
 
 def kill_existing(name):
     """杀掉同名旧进程，防止重复守护实例互相竞争。"""
+    if platform.system() == "Windows":
+        try:
+            subprocess.run(
+                [
+                    "powershell", "-NoProfile", "-Command",
+                    f"Get-CimInstance Win32_Process | Where-Object {{ $_.CommandLine -match '{name}\\.py' }} "
+                    f"| ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+                ],
+                capture_output=True, text=True,
+            )
+        except Exception:
+            pass
+        return
     try:
         out = subprocess.run(
             ["pgrep", "-f", f"{name}\\.py"],

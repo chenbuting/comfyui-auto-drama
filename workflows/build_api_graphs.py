@@ -26,20 +26,37 @@ R2V_FINAL_STEPS = 20
 R2V_MAX_IMAGES = 8  # 官方 Ref2VA 上限 9 张；默认 8（主角多视图 + 场景 + 分镜）
 
 
-def _r2v_cfg():
-    """从项目根 config.json 读 models.r2v（unet/clip），失败用默认值。"""
+def _models_cfg():
+    """从项目根 config.json 读 models（r2v/i2v），失败用默认值。"""
     try:
         with open(os.path.join(os.path.dirname(BASE), "config.json"), encoding="utf-8") as f:
             d = json.load(f)
-        m = (d.get("models") or {}).get("r2v") or {}
+        models = d.get("models") or {}
+        r2v = models.get("r2v") or {}
+        i2v = models.get("i2v") or {}
         max_n = int((d.get("console") or {}).get("max_ref_images") or R2V_MAX_IMAGES)
         return {
-            "unet": m.get("unet") or R2V_UNET_DEFAULT,
-            "clip": m.get("clip") or R2V_CLIP_DEFAULT,
+            "r2v_unet": r2v.get("unet") or R2V_UNET_DEFAULT,
+            "r2v_clip": r2v.get("clip") or R2V_CLIP_DEFAULT,
+            "i2v_unet": i2v.get("unet") or "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+            # 优云等镜像常只有官方 CLIP，链式 I2V 与 R2V 共用 config 里的 clip
+            "i2v_clip": i2v.get("clip") or r2v.get("clip") or R2V_CLIP_DEFAULT,
             "max_images": min(max_n, 9),
         }
     except Exception:
-        return {"unet": R2V_UNET_DEFAULT, "clip": R2V_CLIP_DEFAULT, "max_images": R2V_MAX_IMAGES}
+        return {
+            "r2v_unet": R2V_UNET_DEFAULT,
+            "r2v_clip": R2V_CLIP_DEFAULT,
+            "i2v_unet": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+            "i2v_clip": R2V_CLIP_DEFAULT,
+            "max_images": R2V_MAX_IMAGES,
+        }
+
+
+def _r2v_cfg():
+    """兼容旧调用：返回 r2v 专用字段。"""
+    c = _models_cfg()
+    return {"unet": c["r2v_unet"], "clip": c["r2v_clip"], "max_images": c["max_images"]}
 
 # 纯 widget 节点：前端 widgets_values 顺序 → API input 名（无连接输入时按此映射）
 WIDGET_MAP = {
@@ -176,7 +193,7 @@ RETRY_TASKS = [
 
 def convert_t2v(task):
     """前端工作流 JSON → API 图。"""
-    wf = json.load(open(T2V_WF))
+    wf = json.load(open(T2V_WF, encoding="utf-8"))
     link_map = {}
     for link in wf.get("links", []):
         link_map[link[0]] = (str(link[1]), link[2])
@@ -218,15 +235,20 @@ def convert_t2v(task):
 
 def build_i2v(task):
     """队列快照模板 → 清理增强器 → API 图。"""
-    q = json.load(open(I2V_TEMPLATE))
+    cfg = _models_cfg()
+    q = json.load(open(I2V_TEMPLATE, encoding="utf-8"))
     prompt = q["queue_running"][0][2]
-    drop = {"105:121", "105:122", "105:123", "105:124"}
+    # 去掉 PromptEnhancer + TurboLoRA + SageAttention（优云镜像常未装加速节点）
+    drop = {"105:121", "105:122", "105:123", "105:124", "105:125", "105:126"}
     prompt = {k: v for k, v in prompt.items() if k not in drop}
     for node in prompt.values():
         node["inputs"] = {
             k: v for k, v in node["inputs"].items()
             if not (isinstance(v, list) and v and str(v[0]) in drop)
         }
+    # EasyCache 改接 UNET 直连，避免依赖已删除的加速节点
+    if "105:127" in prompt:
+        prompt["105:127"]["inputs"]["model"] = ["105:6", 0]
     # 覆盖参数
     for nid, node in prompt.items():
         ct = node["class_type"]
@@ -246,6 +268,10 @@ def build_i2v(task):
             node["inputs"]["filename_prefix"] = task["prefix"]
         elif ct == "BasicScheduler":
             node["inputs"]["steps"] = int(task.get("steps") or 4)
+        elif ct == "CLIPLoader":
+            node["inputs"]["clip_name"] = str(task.get("i2v_clip") or cfg["i2v_clip"])
+        elif ct == "UNETLoader":
+            node["inputs"]["unet_name"] = str(task.get("i2v_unet") or cfg["i2v_unet"])
     return prompt
 
 
@@ -269,7 +295,7 @@ def build_r2v(task):
     is_final = quality == "final"
     steps = int(task.get("steps") or (R2V_FINAL_STEPS if is_final else R2V_STEPS))
     use_turbo = steps <= 8
-    wf = json.load(open(R2V_TEMPLATE))
+    wf = json.load(open(R2V_TEMPLATE, encoding="utf-8"))
     link_map = {}
     for link in wf.get("links", []):
         link_map[link[0]] = (str(link[1]), link[2])
@@ -298,11 +324,21 @@ def build_r2v(task):
                     inputs[name] = wv[i]
         api[str(n["id"])] = {"class_type": ntype, "inputs": inputs}
 
-    # 参考图：task['images'] + 本段分镜图 story_image（最多 4 张，动态补节点）
+    # 参考图：task['images'] + 本段分镜图 story_image（最多 max_images 张）
+    # 分镜图必须进槽：已满时挤掉最后一张非分镜，绝不截掉分镜
     load_ids = [nid for nid, node in api.items() if node["class_type"] == "LoadImage"]
-    images = list(task.get("images") or [])
-    if task.get("story_image") and task["story_image"] not in images:
-        images.append(task["story_image"])
+    images = [x for x in (task.get("images") or []) if x]
+    story = task.get("story_image") or ""
+    if story and story not in images:
+        if len(images) >= max_images:
+            images = images[: max_images - 1]
+        images.append(story)
+    elif story and story in images:
+        # 已在列表但可能被截断丢掉 → 提到末位保留
+        images = [x for x in images if x != story]
+        if len(images) >= max_images:
+            images = images[: max_images - 1]
+        images.append(story)
     images = images[:max_images]
     # 参考图多于现有 LoadImage 节点时，动态补充（ref_image_2..7 等）
     for slot in range(len(load_ids), min(len(images), max_images)):
