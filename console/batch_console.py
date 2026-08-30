@@ -316,7 +316,7 @@ def list_media():
 
 
 def scan_assets():
-    """按命名规律扫描素材目录，重建资产映射（角色/场景/分镜 → 最新图片）。"""
+    """按命名规律扫描素材目录，重建角色/场景映射。分镜只列出供手动选用，不自动套到项目。"""
     result = {"role": {}, "scene": {}, "story": {}}
     for d in IMAGE_DIRS:
         if not os.path.isdir(d):
@@ -333,7 +333,8 @@ def scan_assets():
             if m:
                 result["scene"][m.group(1)] = fn
                 continue
-            m = re.match(r"^分镜_s(\d+)_[a-z0-9]+$", stem)
+            # 仅供列表选用，前端不再按序号自动套到新项目
+            m = re.match(r"^分镜_s(\d+)", stem)
             if m:
                 result["story"][int(m.group(1)) - 1] = fn
     return result
@@ -1066,44 +1067,199 @@ def _next_seg_action_text(nxt):
     return (p[:280] + "…") if len(p) > 280 else p
 
 
-def regen_bridge_storyboard(last_frame_png, nxt, state=None):
-    """用上一段末帧重生下一张「衔接分镜」（开头像末帧，后半才是本段戏）。
+def _fill_task_seg_meta(task, state=None):
+    """补全任务的本段角色/场景（从剧本分镜），不改锚点图。"""
+    task = task or {}
+    roles = [str(x) for x in (task.get("roles") or []) if x]
+    scene = str(task.get("scene") or "").strip()
+    if roles and scene:
+        return task
+    try:
+        st = state if isinstance(state, dict) else load_state()
+        sb_list = ((st.get("project") or {}).get("current_script") or {}).get("storyboard_list") or []
+        idx = _task_story_index(task)
+        if idx is not None and 0 <= idx < len(sb_list):
+            s = sb_list[idx] or {}
+            if not roles:
+                roles = [str(x) for x in (s.get("roles") or []) if x]
+            if not scene:
+                scene = str(s.get("scene") or "").strip()
+    except Exception:
+        pass
+    if roles:
+        task["roles"] = roles
+    if scene:
+        task["scene"] = scene
+    return task
 
-    生图失败不抛错，返回 None，链式仍用旧分镜提示。
+
+def _seg_identity_refs(state, task=None, index=None):
+    """本段角色正面/正脸 + 场景图文件名（只引用已有锚点，不重画）。"""
+    proj = (state or {}).get("project") or {}
+    ai = proj.get("asset_imgs") or {}
+    ast = proj.get("asset_state") or {}
+    script = proj.get("current_script") or {}
+    sb_list = script.get("storyboard_list") or []
+    idx = index
+    if idx is None and task:
+        idx = _task_story_index(task)
+    roles = [str(x) for x in ((task or {}).get("roles") or []) if x]
+    scene = str((task or {}).get("scene") or "").strip()
+    if (not roles or not scene) and idx is not None and 0 <= idx < len(sb_list):
+        s = sb_list[idx] or {}
+        if not roles:
+            roles = [str(x) for x in (s.get("roles") or []) if x]
+        if not scene:
+            scene = str(s.get("scene") or "").strip()
+    role_views = ai.get("roleViews") or {}
+    role_main = ai.get("role") or {}
+    role_state = ast.get("roles") or {}
+    role_fns = []
+    for name in roles:
+        st_r = role_state.get(name) or {}
+        views = dict(st_r.get("views") or {})
+        views.update(role_views.get(name) or {})
+        front = views.get("front") or role_main.get(name) or st_r.get("reference") or ""
+        face = views.get("face") or ""
+        if front:
+            role_fns.append(str(front))
+        if face and str(face) != str(front):
+            role_fns.append(str(face))
+    scene_fn = ""
+    if scene:
+        scene_fn = str(
+            (ai.get("scene") or {}).get(scene)
+            or ((ast.get("scenes") or {}).get(scene) or {}).get("reference")
+            or ""
+        ).strip()
+    out = []
+    for x in role_fns + ([scene_fn] if scene_fn else []):
+        x = str(x or "").strip()
+        if x and x not in out and (find_image(x) or os.path.isfile(x)):
+            out.append(x)
+    return out, scene_fn
+
+
+def _pack_chain_video_refs(chain_img, story, identity_refs, max_n=8):
+    """视频参考图顺序：末帧 → 角色正脸/正面 → 场景 → 分镜。坑不够先丢场景。"""
+    chain_img = str(chain_img or "").strip()
+    story = str(story or "").strip()
+    ids = []
+    for x in identity_refs or []:
+        x = str(x or "").strip()
+        if x and x not in ids and x != story and x != chain_img:
+            ids.append(x)
+    reserved = (1 if chain_img else 0) + (1 if story else 0)
+    ids = ids[: max(0, max_n - reserved)]
+    out = []
+    if chain_img:
+        out.append(chain_img)
+    out.extend(ids)
+    if story and story not in out:
+        out.append(story)
+    return out[:max_n]
+
+
+def _resolve_ref_paths(items, limit=6):
+    """文件名或绝对路径 → 本地存在的图片路径。"""
+    out, seen = [], set()
+    for x in items or []:
+        p = str(x or "").strip()
+        if not p:
+            continue
+        lp = p if os.path.isfile(p) else find_image(p)
+        if not lp or lp in seen:
+            continue
+        seen.add(lp)
+        out.append(lp)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _llm_describe_image(ep, image_path, question, timeout=30):
+    """用当前配置的云端/本地 LLM（多模态）看图，短超时，失败就抛错。"""
+    with open(image_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    ext = os.path.splitext(image_path)[1].lower().lstrip(".")
+    mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "webp": "image/webp"}.get(ext, "image/jpeg")
+    payload = {
+        "model": ep.get("model") or "gpt-4o",
+        "messages": [{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}},
+            {"type": "text", "text": question},
+        ]}],
+        "max_tokens": 200,
+    }
+    req = urllib.request.Request(
+        _v1(ep.get("url")) + "/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", **_lm_headers(ep.get("api_key") or "")},
+    )
+    with _opener().open(req, timeout=timeout) as r:
+        d = json.loads(r.read().decode("utf-8"))
+    return d.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+
+def describe_last_frame(image_path):
+    """看上一段末帧：本地视觉 5 秒，失败再试云端 30 秒。都不通就空字符串。"""
+    q = (
+        "用中文只描述你看见的画面，不要编故事。包括：地点与天气光线、"
+        "几个人、各自站位和姿势、景别机位、服装帽子等关键外形。80 字以内。"
+    )
+    try:
+        t = vision_ask(image_path, q, timeout=5)
+        t = re.sub(r"\s+", " ", str(t or "")).strip()
+        if len(t) > 8:
+            return t[:200]
+    except Exception:
+        pass
+    try:
+        main, _ = _llm_endpoints()
+        if main and main.get("url"):
+            t = _llm_describe_image(main, image_path, q, timeout=30)
+            t = re.sub(r"\s+", " ", str(t or "")).strip()
+            if len(t) > 8:
+                return t[:200]
+    except Exception as e:
+        print(f"[chain] 云端看末帧失败：{e}")
+    return ""
+
+
+def regen_bridge_storyboard(last_frame_png, nxt, state=None):
+    """用上一段真实末帧重生下一张分镜：开头像末帧，后半才是本段戏。
+
+    生图失败返回 None，链式仍用原来的分镜图。
     """
     if not last_frame_png or not os.path.isfile(last_frame_png):
         return None
     idx = _task_story_index(nxt)
     seg_n = (idx + 1) if idx is not None else 0
     action = _next_seg_action_text(nxt)
-    desc = ""
-    try:
-        desc = vision_ask(
-            last_frame_png,
-            "用中文只描述你看见的画面，不要编故事。包括：地点与天气光线、"
-            "几个人、各自站位和姿势、景别机位、服装帽子等关键外形。80 字以内。",
-            timeout=60,
-        )
-        desc = re.sub(r"\s+", " ", str(desc or "")).strip()[:200]
-    except Exception as e:
-        print(f"[chain] 读末帧画面失败（仍尝试生衔接分镜）：{e}")
+    desc = describe_last_frame(last_frame_png)
     if not desc:
-        desc = "与上一段视频最后一帧同一场景、同一人物站位、同一光线"
+        desc = "与上一段视频最后一帧同一画面：同一地点、同一人物站位姿势、同一景别与光线"
+    st = state if isinstance(state, dict) else load_state()
+    _fill_task_seg_meta(nxt, st)
+    identity, _ = _seg_identity_refs(st, nxt)
+    ref_paths = _resolve_ref_paths([last_frame_png] + identity, limit=6)
     prompt = (
-        "电影感故事板分镜图，竖构图 3:4，写实，雨夜青石巷气质。"
-        f"【开场必须与上一段结尾同一画面】{desc}。"
-        f"【接着发生】{action or '按本段剧情自然往下演'}。"
-        "从开场站位连续演下去，不要另起一张全新海报，不要换地点，不要多人突然瞬移。"
+        "电影感故事板分镜图，竖构图 3:4，写实。"
+        "人物外貌必须与提供的角色参考图完全同一人（五官、发型、服装），"
+        "参考图只提供外貌，姿势与构图按本段情节。"
+        f"【开场必须与上一段视频最后一帧同一画面】{desc}。"
+        f"【本段接着要演的内容】{action or '按本段剧情自然往下演'}。"
+        "先承接开场，再演到本段情节；不要一上来就画一张全新海报，不要换地点瞬移。"
         "无文字、无水印、无字幕。"
     )
     fn = f"分镜_s{seg_n or 'x'}_bridge_{uuid.uuid4().hex[:8]}.png"
     try:
-        saved, dest = boogu_generate(prompt, fn, "768x1024", timeout=180)
-        print(f"[chain] 已重生衔接分镜：{saved}")
+        saved, dest = boogu_generate(prompt, fn, "768x1024", timeout=120, ref_images=ref_paths)
+        print(f"[chain] 已按末帧+角色锚点重生衔接分镜：{saved} refs={len(ref_paths)}")
     except Exception as e:
-        print(f"[chain] 重生衔接分镜失败（沿用旧分镜提示）：{e}")
+        print(f"[chain] 重生衔接分镜失败（沿用旧分镜）：{e}")
         return None
-    # 写回项目资产，方便页面上看到新分镜
     try:
         st = state if isinstance(state, dict) else load_state()
         proj = st.setdefault("project", {})
@@ -1114,6 +1270,7 @@ def regen_bridge_storyboard(last_frame_png, nxt, state=None):
         projects = st.setdefault("projects", {})
         if proj.get("name"):
             projects[proj["name"]] = dict(proj)
+        save_state(st)
     except Exception as e:
         print(f"[chain] 衔接分镜已生成但未写入项目：{e}")
     return saved
@@ -1121,7 +1278,7 @@ def regen_bridge_storyboard(last_frame_png, nxt, state=None):
 
 def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None, chain_style="frame_story"):
     warnings = []
-    # chain_style: frame=仅末帧 I2V；frame_story=末帧 I2V 硬接 + 分镜写入提示词（过程参考）
+    # chain_style: frame=仅末帧 I2V；frame_story=末帧+角色正脸+分镜 R2V
     chain_style = str(chain_style or "frame_story").strip() or "frame_story"
     if chain_style not in ("frame", "frame_story"):
         chain_style = "frame_story"
@@ -1304,6 +1461,8 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
             "image": task.get("image"),
             "images": task.get("images") or [],
             "story_image": task.get("story_image"),
+            "roles": task.get("roles") or [],
+            "scene": task.get("scene") or "",
             "ref_video": task.get("ref_video"),
             "prompt": task.get("prompt", ""),
             "prompt_id": pid,
@@ -1686,13 +1845,13 @@ def advance_chain(server, state):
         except Exception as e:
             print(f"[chain] 上传失败：{e}")
             continue
-        # 链式：一律 I2V，用上一段末帧作真·首帧（硬接）。
-        # frame_story：分镜只写入提示词作「过程参考」，不进参考图，避免 R2V 多图抢戏导致首帧对不上。
+        # 链式 R2V：末帧锁首帧，角色正脸锁人，分镜管本段戏
         chain_style = (
             str(nxt.get("chain_style") or state.get("chain_style") or "frame_story").strip()
             or "frame_story"
         )
         use_story = chain_style == "frame_story"
+        _fill_task_seg_meta(nxt, state)
         story = str(nxt.get("story_image") or "").strip()
         base_refs = [x for x in (nxt.get("images") or []) if x and not str(x).startswith("chain_")]
         if not story:
@@ -1708,7 +1867,17 @@ def advance_chain(server, state):
                     story = str(sm.get(str(idx)) or sm.get(idx) or "").strip()
             except Exception:
                 story = story or ""
-        # 链式提示词：末帧锁首帧；分镜管本段要演的内容
+        # 用上一段真实末帧 + 角色锚点重生本段分镜（开头接末帧，人跟锚点一致）
+        if use_story:
+            bridged = regen_bridge_storyboard(png, nxt, state)
+            if bridged:
+                story = bridged
+        identity_fns, _ = _seg_identity_refs(state, nxt)
+        try:
+            max_n = int((_CONFIG.get("console") or {}).get("max_ref_images") or 8)
+        except Exception:
+            max_n = 8
+        # 链式提示词：末帧锁首帧；锚点锁人；分镜管本段要演的内容
         chain_prompt = str(nxt.get("prompt") or "")
         if "上一段末帧" not in chain_prompt:
             chain_prompt = (
@@ -1718,7 +1887,7 @@ def advance_chain(server, state):
         if use_story and story and "过程参考" not in chain_prompt:
             chain_prompt = chain_prompt + (
                 " 从该首帧之后，按本段分镜图与提示词自然发展动作、机位与场景内容；"
-                "分镜不是首帧，也不强制以分镜定格收尾。"
+                "人物外貌必须与角色锚点参考图同一人；分镜不是首帧，也不强制以分镜定格收尾。"
             )
         sys.path.insert(0, DEFAULT_WORKFLOW_DIR)
         try:
@@ -1727,15 +1896,17 @@ def advance_chain(server, state):
             print(f"[chain] 加载 build_api_graphs 失败：{e}")
             continue
         if use_story and story:
-            # 第2段起每段都一样：只给模型 2 张图（末帧 + 本段分镜），避免角色多视图抢戏
-            lp = find_image(story)
-            if lp:
-                try:
-                    upload_image(server, lp, story)
-                except Exception as e:
-                    print(f"[chain] 上传分镜失败 {story}: {e}")
+            ref_imgs = _pack_chain_video_refs(chain_img, story, identity_fns, max_n)
+            for img in ref_imgs:
+                if img == chain_img:
+                    continue
+                lp = find_image(img)
+                if lp:
+                    try:
+                        upload_image(server, lp, img)
+                    except Exception as e:
+                        print(f"[chain] 上传参考图失败 {img}: {e}")
             r2v_cfg = (_CONFIG.get("models") or {}).get("r2v") or {}
-            ref_imgs = [chain_img, story]
             task = {
                 "id": nxt["id"],
                 "name": nxt.get("name", nxt["id"]),
@@ -1794,7 +1965,9 @@ def advance_chain(server, state):
         nxt["image"] = chain_img
         nxt["mode"] = submit_mode
         nxt["chain_style"] = chain_style
-        nxt["images"] = [story] if (use_story and story) else []
+        nxt["images"] = ref_imgs if (use_story and story) else []
+        nxt["roles"] = nxt.get("roles") or []
+        nxt["scene"] = nxt.get("scene") or ""
         if story:
             nxt["story_image"] = story
         t["chain_done"] = True
@@ -3040,10 +3213,115 @@ def _image_gen_endpoints():
     return local, cloud if cloud["enabled"] and cloud["url"] else None
 
 
-def _img_openai(ep, prompt, filename, size="768x1024", timeout=300):
+def _save_gen_image(raw, filename):
+    """把生图字节写入素材目录。"""
+    dest = os.path.join(IMAGE_DIRS[0], filename)
+    os.makedirs(IMAGE_DIRS[0], exist_ok=True)
+    with open(dest, "wb") as f:
+        f.write(raw)
+    return filename, dest
+
+
+def _extract_openai_image_bytes(data, timeout):
+    item = (data.get("data") or [{}])[0]
+    b64 = item.get("b64_json")
+    if b64:
+        return base64.b64decode(b64)
+    url = item.get("url")
+    if url:
+        with _opener().open(url, timeout=timeout) as fr:
+            return fr.read()
+    raise RuntimeError("云端生图返回无图片内容")
+
+
+def _multipart_encode(fields, files):
+    """拼 multipart/form-data。files 项为 (name, filename, data, mime)。"""
+    boundary = uuid.uuid4().hex
+    chunks = []
+    for k, v in fields:
+        chunks.append(f"--{boundary}\r\n".encode())
+        chunks.append(f'Content-Disposition: form-data; name="{k}"\r\n\r\n'.encode())
+        chunks.append(str(v).encode("utf-8") + b"\r\n")
+    for name, filename, data, mime in files:
+        chunks.append(f"--{boundary}\r\n".encode())
+        chunks.append(
+            f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode()
+        )
+        chunks.append(f"Content-Type: {mime}\r\n\r\n".encode())
+        chunks.append(data + b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode())
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def _img_openai_refs(ep, prompt, filename, size, timeout, refs):
+    """带参考图生图：先试 JSON generations，再试 edits。"""
+    urls, files = [], []
+    for p in refs[:6]:
+        with open(p, "rb") as f:
+            raw = f.read()
+        ext = os.path.splitext(p)[1].lower().lstrip(".")
+        mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "webp": "image/webp"}.get(ext, "image/png")
+        urls.append(f"data:{mime};base64,{base64.b64encode(raw).decode()}")
+        files.append((os.path.basename(p), raw, mime))
+    headers = {"Content-Type": "application/json", **_lm_headers(ep.get("api_key") or "")}
+    payload = {
+        "model": ep.get("model") or "gpt-image-1",
+        "prompt": prompt,
+        "n": 1,
+        "size": size,
+        "response_format": "b64_json",
+        "images": urls,
+        "image": urls,
+    }
+    try:
+        req = urllib.request.Request(
+            _v1(ep["url"]) + "/images/generations",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+        )
+        with _opener().open(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        raw = _extract_openai_image_bytes(data, timeout)
+        print(f"[img] 参考生图成功（generations，{len(refs)} 张）")
+        return _save_gen_image(raw, filename)
+    except Exception as e1:
+        last = e1
+    edit_size = "1024x1536" if size == "768x1024" else size
+    fields = [
+        ("model", ep.get("model") or "gpt-image-1"),
+        ("prompt", prompt),
+        ("n", "1"),
+        ("size", edit_size),
+        ("response_format", "b64_json"),
+    ]
+    mp_files = [("image[]", name, data, mime) for name, data, mime in files]
+    body, ctype = _multipart_encode(fields, mp_files)
+    req = urllib.request.Request(
+        _v1(ep["url"]) + "/images/edits",
+        data=body,
+        headers={"Content-Type": ctype, **_lm_headers(ep.get("api_key") or "")},
+    )
+    try:
+        with _opener().open(req, timeout=timeout) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        raw = _extract_openai_image_bytes(data, timeout)
+        print(f"[img] 参考生图成功（edits，{len(refs)} 张）")
+        return _save_gen_image(raw, filename)
+    except Exception as e2:
+        raise RuntimeError(f"参考生图失败：{e2}；generations：{last}")
+
+
+def _img_openai(ep, prompt, filename, size="768x1024", timeout=300, ref_images=None):
     """OpenAI 兼容文生图适配器（/v1/images/generations，b64 或 url 返回）。"""
     if not ep.get("url"):
         raise RuntimeError("云端文生图端点未配置")
+    refs = [p for p in (ref_images or []) if p and os.path.isfile(p)]
+    if refs:
+        try:
+            return _img_openai_refs(ep, prompt, filename, size, timeout, refs)
+        except Exception as e:
+            print(f"[img] 带参考图生图失败，改纯文生：{e}")
     payload = {
         "model": ep.get("model") or "gpt-image-1",
         "prompt": prompt,
@@ -3058,21 +3336,8 @@ def _img_openai(ep, prompt, filename, size="768x1024", timeout=300):
     )
     with _opener().open(req, timeout=timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
-    b64 = data["data"][0].get("b64_json")
-    if not b64:
-        url = data["data"][0].get("url")
-        if url:
-            with _opener().open(url, timeout=timeout) as fr:
-                raw = fr.read()
-        else:
-            raise RuntimeError("云端生图返回无图片内容")
-    else:
-        import base64 as _b64
-        raw = _b64.b64decode(b64)
-    dest = os.path.join(IMAGE_DIRS[0], filename)
-    with open(dest, "wb") as f:
-        f.write(raw)
-    return filename, dest
+    raw = _extract_openai_image_bytes(data, timeout)
+    return _save_gen_image(raw, filename)
 
 
 def _img_dashscope(ep, prompt, filename, size="768x1024", timeout=300):
@@ -3133,26 +3398,28 @@ _IMG_ADAPTERS = {
 }
 
 
-def boogu_generate(prompt, filename, size="768x1024", timeout=300):
-    """文生图统一入口：本地 Boogu 优先，配置云端或本地失败时降级云端。"""
+def boogu_generate(prompt, filename, size="768x1024", timeout=300, ref_images=None):
+    """文生图统一入口：本地 Boogu 优先，配置云端或本地失败时降级云端。
+    ref_images 仅分镜使用（角色锚点/场景图保持原样不重画）。"""
     main, backup = _image_gen_endpoints()
-    last_err = None
+
+    def _call_cloud(ep):
+        atype = str(ep.get("provider_type") or "openai").strip() or "openai"
+        if atype == "openai":
+            return _img_openai(ep, prompt, filename, size, timeout, ref_images=ref_images)
+        return _IMG_ADAPTERS.get(atype, _img_openai)(ep, prompt, filename, size, timeout)
+
     if main.get("provider") == "cloud":
         try:
-            atype = str(main.get("provider_type") or "openai").strip() or "openai"
-            return _IMG_ADAPTERS.get(atype, _img_openai)(main, prompt, filename, size, timeout)
-        except Exception as e:
-            last_err = e
+            return _call_cloud(main)
+        except Exception:
             if backup is None or backup.get("provider") != "local":
                 raise
-    # 本地 Boogu
     try:
         return _boogu_local(prompt, filename, size, timeout)
-    except Exception as e:
-        last_err = e
+    except Exception:
         if backup and backup.get("provider") == "cloud":
-            atype = str(backup.get("provider_type") or "openai").strip() or "openai"
-            return _IMG_ADAPTERS.get(atype, _img_openai)(backup, prompt, filename, size, timeout)
+            return _call_cloud(backup)
         raise
 
 
@@ -3477,6 +3744,7 @@ def to_ref2va_six_section(prompt, task=None):
     }
     images = [x for x in (task.get("images") or []) if x]
     pic_of = {img: i + 1 for i, img in enumerate(images)}
+    _fill_task_seg_meta(task)
     seg_roles = [str(x) for x in (task.get("roles") or []) if x]
     seg_scene = str(task.get("scene") or "").strip()
     story_img = str(task.get("story_image") or "").strip()
@@ -4367,11 +4635,39 @@ class Handler(BaseHTTPRequestHandler):
             if not prompt.strip() or not filename.strip():
                 self._send(400, json.dumps({"error": "缺少 prompt 或 filename"}, ensure_ascii=False))
                 return
+            # 只有分镜带参考图：角色锚点/场景图仍纯文生，避免被改掉
+            ref_paths = []
+            if kind == "story":
+                refs = body.get("ref_images") or []
+                if not refs:
+                    try:
+                        st = load_state()
+                        key = body.get("key") or filename
+                        idx = None
+                        m = re.search(r"s(\d+)", str(key), re.I)
+                        if m:
+                            idx = int(m.group(1)) - 1
+                        identity, _ = _seg_identity_refs(st, index=idx)
+                        prev = []
+                        if idx is not None and idx > 0:
+                            sm = ((st.get("project") or {}).get("asset_imgs") or {}).get("story") or {}
+                            prev_fn = sm.get(str(idx - 1)) or sm.get(idx - 1)
+                            if prev_fn:
+                                prev = [prev_fn]
+                        refs = identity + prev
+                    except Exception:
+                        refs = []
+                ref_paths = _resolve_ref_paths(refs, limit=6)
+                if ref_paths and "角色参考图" not in prompt:
+                    prompt = (
+                        "人物外貌必须与提供的角色参考图完全同一人（五官、发型、服装），"
+                        "参考图只提供外貌，姿势与构图按本段情节。"
+                    ) + prompt
             attempts = 0
             last_fn, last_issues = None, []
             while attempts < 3:
                 try:
-                    fn, dest = boogu_generate(prompt, filename, "768x1024")
+                    fn, dest = boogu_generate(prompt, filename, "768x1024", ref_images=ref_paths)
                 except Exception as e:
                     self._send(400, json.dumps({"error": f"Boogu 生图失败：{e}"}, ensure_ascii=False))
                     return
@@ -4899,15 +5195,40 @@ class Handler(BaseHTTPRequestHandler):
             if not sb.get("scene") and not sb.get("action"):
                 self._send(400, json.dumps({"error": "分镜缺少场景或动作"}, ensure_ascii=False))
                 return
+            try:
+                idx = int(body.get("index") if body.get("index") is not None else 0)
+            except Exception:
+                idx = 0
+            prev_sb = body.get("prev_storyboard") or {}
+            # 不再读上一张图（本地视觉没开时会把整个控制台卡死）
+            prev_end = ""
+            if idx > 0 and prev_sb:
+                prev_end = "。".join(
+                    x for x in (
+                        str(prev_sb.get("scene") or "").strip(),
+                        str(prev_sb.get("action") or "").strip(),
+                    ) if x
+                )
+            extra = ""
+            if idx > 0:
+                extra = (
+                    "\n\n【上一段结尾——本图开场必须承接】\n"
+                    f"{prev_end or '与上一段同一场景、同一人物站位'}\n"
+                    "开头不要另起一张全新海报，先承接上述结尾，再演本段动作。\n"
+                )
             user = (
-                "根据下面这个分镜生成分镜图提示词：\n"
-                + json.dumps({"storyboard": sb, "roles": roles}, ensure_ascii=False, indent=1)
+                "根据下面这个分镜生成分镜图提示词："
+                + extra
+                + "\n"
+                + json.dumps({"storyboard": sb, "roles": roles, "index": idx}, ensure_ascii=False, indent=1)
             )
             try:
-                resp = lmstudio_chat([
+                # 只走当前配置的主端点，60 秒超时；失败立刻返回，不再降级死等本地模型
+                main, _backup = _llm_endpoints()
+                resp = _chat_once(main, [
                     {"role": "system", "content": STORY_PROMPT_SYSTEM},
                     {"role": "user", "content": user},
-                ], token)
+                ], token, timeout=60)
                 content = resp.get("choices", [{}])[0].get("message", {}).get("content", "").strip().strip('"')
                 if not content:
                     raise RuntimeError("AI 返回为空")

@@ -366,6 +366,7 @@
       <h3 style="font-size:14px;margin:16px 0 10px">🎬 分镜图（每段故事板）</h3>
       <label style="font-size:12px;color:var(--muted);margin-bottom:10px;display:inline-block">
         <input type="checkbox" id="storyAiPrompt" checked> 🤖 AI 按剧情生成规范提示词（更符合情节，略慢）
+        <div class="hint" style="font-size:11px;margin:4px 0 0;width:100%">第 2 段起会自动接着上一段结尾画，不要另起一张海报。重做时请按顺序点分镜 2→3→4…</div>
       </label>
       <div id="storyAssets" class="grid"></div>
       <h3 style="font-size:14px;margin:16px 0 10px">🎥 参考视频（动作/风格参考）</h3>
@@ -419,7 +420,7 @@
           </select>
         </label>
         <div class="hint" style="font-size:11px;margin:2px 0 8px 0;width:100%">
-          推荐：第2、3、4…每段都只给模型两张图——上一段最后一帧（锁第1帧）+ 这一段自己的分镜图（演戏）。不塞角色四视图，避免抢戏。
+          第2段起：按上一段真实末帧重画衔接分镜（人跟角色锚点图一致），再把「末帧 + 角色正脸 + 场景 + 新分镜」一起交给模型。段与段之间会多等一两分钟画分镜。
         </div>
         <label style="font-size:13px"><input type="checkbox" id="qualityMode" checked> 🎧 成片质量（无加速LoRA·20步，声音清晰，慢）</label>
         <label style="font-size:13px">步数
@@ -1356,16 +1357,16 @@ function effectiveRefs(i) {
   const scene = (seg.scene && assetImgs.scene[seg.scene]) ? assetImgs.scene[seg.scene] : '';
   const manuals = [$('roleImage1').value, $('roleImage2').value, $('sceneImage').value].filter(Boolean);
 
-  // 角色视图：带优先级，挤位时先扔 back/side，尽量留 front/face
+  // 只带正面/正脸锁人，侧背不占坑，给分镜和场景留位
   const roleItems = [];
-  const viewPri = { front: 0, face: 1, side: 2, back: 3 };
+  const viewPri = { front: 0, face: 1 };
   roles.forEach(r => {
     const n = r.role_name || r.name;
     if (!n) return;
     if (segRoles.size && !segRoles.has(n)) return;
     const views = ((assetImgs.roleViews && assetImgs.roleViews[n]) || {});
     let any = false;
-    ['front', 'face', 'side', 'back'].forEach(v => {
+    ['front', 'face'].forEach(v => {
       if (views[v]) { roleItems.push({ path: views[v], pri: viewPri[v] }); any = true; }
     });
     if (!any && assetImgs.role[n]) roleItems.push({ path: assetImgs.role[n], pri: 0 });
@@ -1405,6 +1406,9 @@ async function submit() {
   let tasks = collectPromptTasks();
   tasks = tasks.filter(t => t.prompt);
   if (!tasks.length) { toast('没有可提交的任务（请先在第 4 步生成提示词）', true); return; }
+  if (tasks.length > 1 && !$('chainMode').checked) {
+    if (!confirm('多段剧情没勾「链式衔接」，段与段会对不上。仍要提交吗？')) return;
+  }
   // 一键分辨率覆盖
   const globalMp = $('submitMp').value;
   if (globalMp) tasks = tasks.map(t => ({...t, mp: parseFloat(globalMp)}));
@@ -2172,10 +2176,8 @@ async function loadProject() {
         });
         sceneNames = [...new Set(((currentScript && currentScript.storyboard_list) || []).map(s => s.scene).filter(Boolean))];
         sceneNames.forEach(sc => { if (a.scene[sc]) rebuilt.scene[sc] = a.scene[sc]; });
-        ((currentScript && currentScript.storyboard_list) || []).forEach((s, i) => {
-          if (a.story[i]) rebuilt.story[i] = a.story[i];
-        });
-        assetImgs = rebuilt;
+        // 分镜不按 s1/s2 自动套旧项目的图，只恢复本项目已保存的；要旧图请手动选
+        assetImgs = { ...rebuilt, story: (assetImgs && assetImgs.story) || {} };
       } catch (e) {}
     }
     savedProject = p;
@@ -2282,17 +2284,26 @@ function renderAssets() {
   }).join('') || '<div class="empty" style="grid-column:1/-1">剧本没有场景信息</div>';
 
   const sb = (currentScript && currentScript.storyboard_list) || [];
+  const storyFiles = (images || []).filter(f => /^分镜_/.test(f));
   $('storyAssets').innerHTML = sb.map((s, i) => {
     const img = assetImgs.story[i] || '';
     const prompt = assetPrompts.story[i] || defaultStoryPrompt(i);
+    const files = (img && !storyFiles.includes(img)) ? storyFiles.concat([img]) : storyFiles;
+    const pickOpts = ['<option value="">选用已有分镜…</option>']
+      .concat(files.map(f => `<option value="${escAttr(f)}" ${f === img ? 'selected' : ''}>${esc(f)}</option>`))
+      .join('');
     return `<div class="card-item">
       <div class="r1"><span class="name">分镜 ${i + 1} · ${esc(s.scene || '')}</span>${verifyBadge('story', i)}</div>
       <img src="${img ? '/media/' + encodeURIComponent(img) : ''}" style="width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:8px;border:1px solid var(--line);background:#f1f4f9;display:${img ? 'block':'none'}">
       <details style="margin-top:8px"><summary style="font-size:12px;color:var(--muted);cursor:pointer">📝 提示词（可编辑）</summary>
         <textarea class="asset-prompt" data-kind="story" data-key="${i}" rows="4" style="width:100%;font-size:11px;margin-top:6px">${esc(prompt)}</textarea>
       </details>
+      <label class="hint" style="display:block;margin-top:8px;font-size:12px">选用已有图
+        <select style="width:100%;margin-top:4px" onchange="pickExistingStory(${i}, this.value)">${pickOpts}</select>
+      </label>
       <div class="row" style="margin-top:8px">
         <button class="btn" onclick="genStoryImg(${i})">${img ? '🔄 重新生成' : '🎬 生成分镜图'}</button>
+        <button class="btn" onclick="clearStoryImg(${i})" ${img ? '' : 'disabled'}>清除</button>
         <button class="btn" onclick="openPromptModal('story', ${i})">💬 对话修改</button>
       </div>
     </div>`;
@@ -2417,7 +2428,10 @@ async function genAsset(kind, key, prompt, label, opts) {
   }
   const r = await fetch('/api/asset_gen', {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({prompt, filename: fn, kind, expected}),
+    body: JSON.stringify({
+      prompt, filename: fn, kind, expected, key,
+      ref_images: (kind === 'story') ? (opts.ref_images || []) : [],
+    }),
   });
   const d = await r.json();
   if (!r.ok) throw new Error(d.error || '生图失败');
@@ -2460,6 +2474,11 @@ function projectEraZh() {
 function defaultStoryPrompt(i) {
   // 中文分镜提示词：直接用剧本的中文要素（场景/动作/对白/情绪）
   const s = (currentScript.storyboard_list || [])[i] || {};
+  let bridge = '';
+  if (i > 0) {
+    const prev = (currentScript.storyboard_list || [])[i - 1] || {};
+    bridge = `【开场必须承接上一段结尾】上一段场景「${prev.scene || ''}」，动作到「${prev.action || ''}」结束。本图开头人物站位、景别、光线必须接着那个结尾，不要另起一张全新海报；然后才演本段动作。`;
+  }
   const parts = [];
   // 场景描述优先用资产状态表（与文字提示词同一来源，保证生图/出片一致）
   const scDesc = (assetState.scenes && assetState.scenes[s.scene] && assetState.scenes[s.scene].desc) || s.scene || '';
@@ -2482,7 +2501,8 @@ function defaultStoryPrompt(i) {
     return `${n}（${bits || r.role_desc || ''}）`;
   }).join('；');
   const roleLine = roleDesc ? `画面人物形象必须与角色设定一致：${roleDesc}。` : '';
-  return p + `电影感故事板分镜图，竖构图，${projectEraZh()}风格，写实。${roleLine}`
+  return (bridge ? bridge : '') + p + `电影感故事板分镜图，竖构图，${projectEraZh()}风格，写实。${roleLine}`
+    + `人物外貌必须与提供的角色锚点参考图完全同一人（五官、发型、服装），参考图只提供外貌，姿势构图按本段情节。`
     + `画面中严格只有剧本出现的 ${Math.max((currentScript.storyboard_list || [])[i] && ((currentScript.storyboard_list || [])[i].roles || []).length || 0, 1)} 个人，`
     + `绝对没有额外人物、没有多余的肢体/手臂/手从画面外伸入，每人四肢完整、各两只手、手指清晰不粘连，`
     + `服装道具正常无穿帮，无文字乱码，无重复人物，无塑料包装盒，无饮料瓶`
@@ -2597,35 +2617,86 @@ async function genSceneImg(i) {
   finally { btn.disabled = false; btn.textContent = '🖼️ 生成'; }
 }
 
-async function genStoryImg(i) {
+async function buildStoryPrompt(i) {
+  // 第 2 段起强制带上一段结尾；重新生成也会重写提示词（旧海报提示不能留）
+  let prompt = defaultStoryPrompt(i);
   const ta = document.querySelector(`.asset-prompt[data-kind="story"][data-key="${i}"]`);
-  let prompt = (ta && ta.value.trim()) || defaultStoryPrompt(i);
-  // AI 按剧情生成规范提示词（用户手动编辑过的不覆盖）
-  if ($('storyAiPrompt').checked && !(ta && ta.value.trim())) {
-    toastLoading(`🤖 AI 正在按剧情生成分镜 ${i + 1} 提示词（约 20-40 秒）…`);
+  const keepOld = i === 0 && ta && ta.value.trim() && !$('storyAiPrompt').checked;
+  if (keepOld) return ta.value.trim();
+  if ($('storyAiPrompt') && $('storyAiPrompt').checked) {
     try {
       const sb = (currentScript.storyboard_list || [])[i] || {};
+      const prev = i > 0 ? ((currentScript.storyboard_list || [])[i - 1] || {}) : null;
       const roles = ((currentScript.role_list || [])).map(r => ({
         name: r.role_name || r.name,
         desc: r.role_desc || '',
         anchor_prompt: assetPrompts.role[r.role_name || r.name] || '',
       }));
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 70000);
       const r = await fetch('/api/story_prompt', {
         method: 'POST', headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({storyboard: sb, roles, lmstudio_token: $('lmToken').value.trim()}),
+        body: JSON.stringify({
+          storyboard: sb,
+          roles,
+          index: i,
+          prev_storyboard: prev,
+          lmstudio_token: $('lmToken').value.trim(),
+        }),
+        signal: ac.signal,
       });
+      clearTimeout(timer);
       const d = await r.json();
-      if (r.ok && d.prompt) {
-        prompt = d.prompt;
-        setAssetPrompt('story', i, prompt);
-      }
+      if (r.ok && d.prompt) prompt = d.prompt;
     } catch (e) { /* AI 失败回退规则模板 */ }
   }
+  setAssetPrompt('story', i, prompt);
+  return prompt;
+}
+
+function storyRefImages(i) {
+  // 画分镜时对照的图：本段角色正面/正脸 + 场景 + 上一张分镜（不改锚点）
+  const s = (currentScript.storyboard_list || [])[i] || {};
+  const refs = [];
+  (s.roles || []).forEach(n => {
+    const views = (assetImgs.roleViews && assetImgs.roleViews[n]) || {};
+    const front = views.front || assetImgs.role[n];
+    const face = views.face;
+    if (front) refs.push(front);
+    if (face && face !== front) refs.push(face);
+  });
+  if (s.scene && assetImgs.scene[s.scene]) refs.push(assetImgs.scene[s.scene]);
+  if (i > 0 && assetImgs.story[i - 1]) refs.push(assetImgs.story[i - 1]);
+  return [...new Set(refs.filter(Boolean))];
+}
+
+function pickExistingStory(i, fn) {
+  if (!fn) {
+    delete assetImgs.story[i];
+  } else {
+    assetImgs.story[i] = fn;
+  }
+  renderAssets();
+  autoSaveProject(true);
+  toast(fn ? `✅ 分镜 ${i + 1} 已选用「${fn}」` : `已清除分镜 ${i + 1}`);
+}
+
+function clearStoryImg(i) {
+  delete assetImgs.story[i];
+  renderAssets();
+  autoSaveProject(true);
+  toast(`已清除分镜 ${i + 1}，可重新生成或选用已有图`);
+}
+
+async function genStoryImg(i) {
+  toastLoading(`🤖 正在生成分镜 ${i + 1} 提示词…`);
+  let prompt = await buildStoryPrompt(i);
   assetPrompts.story[i] = prompt;
   const btn = event.target; btn.disabled = true; btn.textContent = '生成中…';
   toastLoading(`🎬 正在生成分镜 ${i + 1} 图（约 10-30 秒）…`);
   try {
-    assetImgs.story[i] = await genAsset('story', `s${i + 1}`, prompt, '分镜');
+    assetImgs.story[i] = await genAsset('story', `s${i + 1}`, prompt, '分镜', {ref_images: storyRefImages(i)});
+    if (assetImgs.story[i] && !images.includes(assetImgs.story[i])) images.push(assetImgs.story[i]);
     renderAssets();
     autoSaveProject(true);
     toast(`✅ 分镜 ${i + 1} 图已生成`);
@@ -2750,7 +2821,8 @@ async function genAllAssets() {
       todo.push({
         label: `分镜 ${i + 1}`,
         fn: async () => {
-          assetImgs.story[i] = await genAsset('story', `s${i + 1}`, defaultStoryPrompt(i), '分镜');
+          const prompt = await buildStoryPrompt(i);
+          assetImgs.story[i] = await genAsset('story', `s${i + 1}`, prompt, '分镜', {ref_images: storyRefImages(i)});
         },
       });
     }
