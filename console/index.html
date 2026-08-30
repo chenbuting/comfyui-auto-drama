@@ -1153,19 +1153,26 @@ function composeTaskPrompt(s, script) {
 
 async function buildPrompts() {
   if (!currentScript) { toast('请先在第 2/3 步生成并确认剧本', true); return; }
+  const fromTable = collectScriptFromTable();
+  if (fromTable && (fromTable.storyboard_list || []).length) {
+    currentScript = Object.assign({}, currentScript, fromTable, {
+      role_list: currentScript.role_list || fromTable.role_list,
+      title: currentScript.title || fromTable.title,
+      logline: currentScript.logline || fromTable.logline,
+    });
+    (currentScript.storyboard_list || []).forEach(s => {
+      delete s.prompt;
+      delete s.video_prompt;
+    });
+  }
   const btn = $('btnBuildPrompts');
   const useLlm = $('promptLlm').checked;
   btn.disabled = true; btn.textContent = useLlm ? '✨ AI 扩写中（可能数分钟）…' : '生成中…';
   $('promptHint').textContent = '';
   try {
-    const hasPrompt = (currentScript.storyboard_list || []).some(s => s.prompt);
     if (useLlm) {
       toastLoading('✨ AI 扩写启动中…');
-      // Prompt 模式 → 拼成 Prompt 分块走 AI 润色；剧本模式 → 直接 AI 扩写
-      const text = hasPrompt
-        ? (currentScript.storyboard_list || []).map((s, i) =>
-            `Prompt ${i+1}（0:00-0:${s.duration || 10}）\n\nCopy\n${s.prompt}`).join('\n\n')
-        : JSON.stringify(currentScript);
+      const text = JSON.stringify(currentScript);
       const r = await fetch('/api/expand_script', {
         method: 'POST', headers: {'Content-Type':'application/json'},
         body: JSON.stringify({text, use_llm: true, async: true, lmstudio_token: $('lmToken').value.trim()}),

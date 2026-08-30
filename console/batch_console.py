@@ -862,6 +862,7 @@ def enhance_prompt(prompt, task=None):
     p = str(prompt or "").strip()
     if not p:
         return p
+    p = _align_prompt_duration(p, task.get("duration") or 10)
     # 0. 对白标签兜底：<d> 内只留纯对白（角色名/动作移到标签外）
     p = _fix_dialogue_tags(p)
     # 0b. 说话人 ID：H3 靠 (S1)/(S2) 区分音色，中文名必须转成官方 ID
@@ -2033,6 +2034,40 @@ def _task_done(t):
     return bool(t.get("downloaded") or t.get("output_file"))
 
 
+def _project_task_prefixes(proj):
+    """当前项目任务名前缀：项目名 + 剧本标题。"""
+    prefixes = []
+    name = str((proj or {}).get("name") or "").strip()
+    if name:
+        prefixes.append(name + "_")
+    for k in ("current_script", "script_before", "script_after"):
+        s = (proj or {}).get(k) or {}
+        if isinstance(s, dict) and s.get("title"):
+            prefixes.append(str(s["title"]) + "_")
+            break
+    return prefixes
+
+
+def _tasks_for_current_project(state):
+    """只拿当前项目的任务，避免断点续接误用别的项目的高版本批次。"""
+    tasks = state.get("tasks") or []
+    proj = state.get("project") or {}
+    submitted = set(proj.get("submitted_task_names") or [])
+    if submitted:
+        hit = [t for t in tasks if t.get("name") in submitted]
+        if hit:
+            return hit
+    prefixes = _project_task_prefixes(proj)
+    if prefixes:
+        hit = [
+            t for t in tasks
+            if any(str(t.get("name") or "").startswith(p) for p in prefixes)
+        ]
+        if hit:
+            return hit
+    return tasks
+
+
 def stop_generation(server=None):
     """停止：打断云端 + 清空队列 + 停链式守护；已完成保留，未完成标记可续接。"""
     server = (server or "").strip() or DEFAULT_SERVER
@@ -2085,9 +2120,9 @@ def resume_from_breakpoint(server=None):
     """从断点继续：不覆盖已完成段，只从最新批次最后一个完成段往后续接。"""
     server = (server or "").strip() or DEFAULT_SERVER
     state = load_state()
-    tasks = state.get("tasks", [])
+    tasks = _tasks_for_current_project(state)
     if not tasks:
-        return {"ok": False, "error": "没有任务可继续"}
+        return {"ok": False, "error": "当前项目没有任务可继续"}
 
     ver = max((_task_version(t.get("name")) for t in tasks), default=0)
     batch = [t for t in tasks if _task_version(t.get("name")) == ver]
@@ -2210,6 +2245,101 @@ def _add_shot_timestamps(body, duration):
     return "".join(out)
 
 
+_TIME_WIN_RE = re.compile(r"(\d+(?:\.\d+)?)\s*[-–—~到至]\s*(\d+(?:\.\d+)?)\s*秒")
+
+
+def _fmt_sec(x):
+    x = max(0, x)
+    r = int(round(x))
+    if abs(x - r) < 0.2:
+        return str(r)
+    return f"{round(x * 2) / 2:.1f}".replace(".0", "")
+
+
+def _align_prompt_duration(prompt, duration):
+    """把整条动作时间轴压进当前段时长（如 12 秒表 → 6 秒表），不只改「几秒」这几个字。"""
+    try:
+        dur = max(1, min(30, int(float(duration or 10))))
+    except (TypeError, ValueError):
+        dur = 10
+    p = str(prompt or "").strip()
+    if not p:
+        return p
+
+    ends = [float(m.group(2)) for m in _TIME_WIN_RE.finditer(p)]
+    for m in re.finditer(r"按\s*(\d+(?:\.\d+)?)\s*秒完成", p):
+        ends.append(float(m.group(1)))
+    max_end = max(ends) if ends else 0
+    if max_end > dur:
+        scale = dur / max_end
+
+        def scale_t(v):
+            x = float(v) * scale
+            r = int(round(x))
+            if abs(x - r) < 0.2:
+                return max(0, min(dur, r))
+            return max(0, min(dur, round(x * 2) / 2))
+
+        def repl_win(m):
+            a, b = scale_t(m.group(1)), scale_t(m.group(2))
+            if b <= a:
+                b = min(dur, a + 1 if isinstance(a, int) else a + 0.5)
+            return f"{_fmt_sec(a)}-{_fmt_sec(b)} 秒"
+
+        p = _TIME_WIN_RE.sub(repl_win, p)
+        p = re.sub(r"按\s*\d+(?:\.\d+)?\s*秒完成", f"按 {dur} 秒完成", p)
+
+        def repl_at(m):
+            t = (int(m.group(1)) * 60 + int(m.group(2))) * scale
+            t = min(max(0, t), max(0, dur - 0.1))
+            mm, ss = divmod(int(t), 60)
+            return f"At {mm:02d}:{ss:02d}.{m.group(3)}"
+
+        p = re.sub(r"At\s+(\d+):(\d+)\.(\d+)", repl_at, p)
+    else:
+        def clamp_win(m):
+            a, b = float(m.group(1)), float(m.group(2))
+            if b > dur:
+                b = dur
+            if a >= dur:
+                a = max(0, dur - 1)
+                b = dur
+            if b <= a:
+                b = min(dur, a + 1)
+            return f"{_fmt_sec(a)}-{_fmt_sec(b)} 秒"
+
+        p = _TIME_WIN_RE.sub(clamp_win, p)
+        p = re.sub(r"按\s*\d+(?:\.\d+)?\s*秒完成", f"按 {dur} 秒完成", p)
+
+    def repl_sec(m):
+        n = int(m.group(1))
+        if 5 <= n <= 15 and n != dur:
+            return f"{dur}秒"
+        return m.group(0)
+
+    # 不改「4.5-5 秒」里的后一个数，避免压完后又被改成设定时长
+    p = re.sub(r"(?<![\d.\-])(\d+)\s*秒", repl_sec, p)
+    contract = f"本段时长 {dur} 秒，所有动作、对白与运镜必须在 0 到 {dur} 秒内完成。"
+    if f"本段时长 {dur} 秒" not in p:
+        if p.startswith("integrated_multimodal_description:"):
+            p = p.replace(
+                "integrated_multimodal_description:",
+                f"integrated_multimodal_description: {contract}",
+                1,
+            )
+        else:
+            p = contract + p
+    return p
+
+
+def _finalize_seg_prompt(p, duration):
+    """扩写或复用后的提示词统一压进当前段时长。"""
+    return _align_prompt_duration(
+        optimize_prompt_block(_normalize_llm_prompt(p), duration),
+        duration,
+    )
+
+
 def optimize_prompt_block(body, duration):
     """把对话导出的 Prompt 块规范成 H3 任务提示词。
 
@@ -2217,6 +2347,7 @@ def optimize_prompt_block(body, duration):
     - 全局 [Shot N] → 每段独立任务从 [Shot 1] 开始
     - 三大字段顺序固定：integrated_multimodal_description → overall_soundscape → non_diegetic_music
     - 段内多镜头无时间戳时按时长均分补 At
+    - 按当前段时长改写正文里的秒数
     """
     p = str(body or "").strip()
     if not p:
@@ -2226,14 +2357,15 @@ def optimize_prompt_block(body, duration):
     m_snd = re.search(r"overall_soundscape:\s*(.+?)(?=\n?\s*non_diegetic_music:|\Z)", p, re.S)
     m_mus = re.search(r"non_diegetic_music:\s*(.+?)(?=\Z)", p, re.S)
     if not (m_desc and m_snd and m_mus):
-        return _renumber_shots(p)  # 结构不完整，只重排镜头号
+        return _align_prompt_duration(_renumber_shots(p), duration)
     desc = _renumber_shots(m_desc.group(1).strip())
     desc = _add_shot_timestamps(desc, duration)
-    return (
+    out = (
         f"integrated_multimodal_description: {desc}\n\n"
         f"overall_soundscape: {m_snd.group(1).strip()}\n\n"
         f"non_diegetic_music: {m_mus.group(1).strip()}"
     )
+    return _align_prompt_duration(out, duration)
 
 
 def parse_prompt_blocks(text):
@@ -3600,7 +3732,9 @@ def llm_expand_storyboards(data, token=""):
     user_content = (
         f"剧本标题：{data.get('title') or data.get('name') or '未命名'}\n"
         + (asset_block + "\n" if asset_block else "")
-        + "以下每个分镜扩写成完整 H3 三段式提示词。\n"
+        + "以下每个分镜扩写成完整 H3 三段式提示词。"
+          "每段必须严格按该项 duration_s 写时间（例如 6 就写 0 到 6 秒），"
+          "禁止默认写成 10 秒。\n"
         + json.dumps(items, ensure_ascii=False, indent=1)
     )
     resp = lmstudio_chat([
@@ -3959,11 +4093,14 @@ def start_expand_job(text, token=""):
                 scene = str(_pick(sb, "scene", "location", "scene_name") or "").strip()
                 job["current"] = f"第 {i + 1}/{len(storyboards)} 段" + (f" · {scene}" if scene else "")
                 existing_p = str(existing[i].get("prompt") or "") if i < len(existing) else ""
+                dur = rows[i]["duration"]
                 if _is_full_prompt(existing_p):
-                    rows[i]["prompt"] = existing_p
-                    prev_p = existing_p
+                    # 已有完整稿也要按当前时长压时间轴，避免 12 秒表原样留下
+                    rows[i]["prompt"] = _finalize_seg_prompt(existing_p, dur)
+                    prev_p = rows[i]["prompt"]
                     job["done"] = i + 1
-                    print(f"[expand] 第 {i + 1} 段已完整，跳过", flush=True)
+                    print(f"[expand] 第 {i + 1} 段已完整，按 {dur} 秒对齐后跳过扩写", flush=True)
+                    _save_expand_progress(rows, tid)
                     continue
                 p = None
                 for attempt in range(3):
@@ -3976,8 +4113,8 @@ def start_expand_job(text, token=""):
                         # 不自动重载 LM Studio（用户要求：重载会反复占用/崩溃本机）
                         time.sleep(3)
                 if p:
-                    rows[i]["prompt"] = _normalize_llm_prompt(p)
-                    prev_p = p
+                    rows[i]["prompt"] = _finalize_seg_prompt(p, dur)
+                    prev_p = rows[i]["prompt"]
                     _save_expand_progress(rows, tid)  # 每段立即保存
                 else:
                     print(f"[expand] 第 {i + 1} 段扩写失败，回退规则", flush=True)
@@ -4075,7 +4212,7 @@ def llm_polish_prompts(rows, token=""):
     for i, r in enumerate(rows):
         p = by_id.get(i + 1)
         if p:
-            r["prompt"] = _normalize_llm_prompt(p)
+            r["prompt"] = _finalize_seg_prompt(p, r.get("duration") or 10)
     return rows
 
 
@@ -4108,7 +4245,10 @@ def expand_script_json_llm(text, token=""):
     for i, (sb, row) in enumerate(zip(storyboards, rows)):
         p = prompts.get(i + 1)
         if p:
-            row["prompt"] = _normalize_llm_prompt(p)
+            row["prompt"] = _align_prompt_duration(
+                optimize_prompt_block(_normalize_llm_prompt(p), row["duration"]),
+                row["duration"],
+            )
         else:
             own = str(_pick(sb, "prompt", "video_prompt", "text", "description") or "").strip()
             row["prompt"] = (
