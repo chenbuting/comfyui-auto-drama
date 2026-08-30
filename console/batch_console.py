@@ -1037,6 +1037,88 @@ def extract_last_frame(video_path):
     return out_png
 
 
+def _task_story_index(task):
+    """任务名里的段号 → 分镜下标（01 → 0）。"""
+    m = re.search(r"_(\d+)(?:_v\d+)?$", str((task or {}).get("name") or ""))
+    return int(m.group(1)) - 1 if m else None
+
+
+def _next_seg_action_text(nxt):
+    """取下一段要演的情节（剧本分镜优先，否则截一段提示词）。"""
+    try:
+        st = load_state()
+        proj = st.get("project") or {}
+        sb_list = ((proj.get("current_script") or {}).get("storyboard_list") or [])
+        idx = _task_story_index(nxt)
+        if idx is not None and 0 <= idx < len(sb_list):
+            s = sb_list[idx] or {}
+            bits = [
+                str(s.get("scene") or s.get("location") or "").strip(),
+                str(s.get("action") or s.get("content") or s.get("plot") or "").strip(),
+                str(s.get("dialogue") or s.get("dialog") or "").strip(),
+            ]
+            txt = "。".join(x for x in bits if x)
+            if txt:
+                return txt[:400]
+    except Exception:
+        pass
+    p = str((nxt or {}).get("prompt") or "")
+    return (p[:280] + "…") if len(p) > 280 else p
+
+
+def regen_bridge_storyboard(last_frame_png, nxt, state=None):
+    """用上一段末帧重生下一张「衔接分镜」（开头像末帧，后半才是本段戏）。
+
+    生图失败不抛错，返回 None，链式仍用旧分镜提示。
+    """
+    if not last_frame_png or not os.path.isfile(last_frame_png):
+        return None
+    idx = _task_story_index(nxt)
+    seg_n = (idx + 1) if idx is not None else 0
+    action = _next_seg_action_text(nxt)
+    desc = ""
+    try:
+        desc = vision_ask(
+            last_frame_png,
+            "用中文只描述你看见的画面，不要编故事。包括：地点与天气光线、"
+            "几个人、各自站位和姿势、景别机位、服装帽子等关键外形。80 字以内。",
+            timeout=60,
+        )
+        desc = re.sub(r"\s+", " ", str(desc or "")).strip()[:200]
+    except Exception as e:
+        print(f"[chain] 读末帧画面失败（仍尝试生衔接分镜）：{e}")
+    if not desc:
+        desc = "与上一段视频最后一帧同一场景、同一人物站位、同一光线"
+    prompt = (
+        "电影感故事板分镜图，竖构图 3:4，写实，雨夜青石巷气质。"
+        f"【开场必须与上一段结尾同一画面】{desc}。"
+        f"【接着发生】{action or '按本段剧情自然往下演'}。"
+        "从开场站位连续演下去，不要另起一张全新海报，不要换地点，不要多人突然瞬移。"
+        "无文字、无水印、无字幕。"
+    )
+    fn = f"分镜_s{seg_n or 'x'}_bridge_{uuid.uuid4().hex[:8]}.png"
+    try:
+        saved, dest = boogu_generate(prompt, fn, "768x1024", timeout=180)
+        print(f"[chain] 已重生衔接分镜：{saved}")
+    except Exception as e:
+        print(f"[chain] 重生衔接分镜失败（沿用旧分镜提示）：{e}")
+        return None
+    # 写回项目资产，方便页面上看到新分镜
+    try:
+        st = state if isinstance(state, dict) else load_state()
+        proj = st.setdefault("project", {})
+        ai = proj.setdefault("asset_imgs", {})
+        story = ai.setdefault("story", {})
+        if idx is not None:
+            story[str(idx)] = saved
+        projects = st.setdefault("projects", {})
+        if proj.get("name"):
+            projects[proj["name"]] = dict(proj)
+    except Exception as e:
+        print(f"[chain] 衔接分镜已生成但未写入项目：{e}")
+    return saved
+
+
 def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None, chain_style="frame_story"):
     warnings = []
     # chain_style: frame=仅末帧 I2V；frame_story=末帧 I2V 硬接 + 分镜写入提示词（过程参考）
@@ -1490,10 +1572,19 @@ def advance_chain(server, state):
             continue
         if not nxt.get("chain_waiting") or nxt.get("prompt_id"):
             continue
-        # 按 chain_prev 找上一段（支持重新生成指定上一段）；无则取列表前一个
+        # 按 chain_prev 找上一段；若该段已经接过（chain_done），改接最近完成的前一段
         t = by_id.get(nxt.get("chain_prev")) if nxt.get("chain_prev") else None
         if t is None and i > 0:
             t = tasks[i - 1]
+        if t is not None and t.get("chain_done"):
+            t = None
+            for j in range(i - 1, -1, -1):
+                prev = tasks[j]
+                if prev.get("output_file") and not prev.get("error"):
+                    t = prev
+                    t["chain_done"] = False
+                    nxt["chain_prev"] = prev.get("id")
+                    break
         if t is None:
             continue
         if t.get("chain_done"):
@@ -1609,23 +1700,25 @@ def advance_chain(server, state):
                 if str(x).startswith("分镜_") or str(x).startswith("story_"):
                     story = x
                     break
-        # 链式提示词：首帧硬接；分镜仅文字引导过程
+        if not story:
+            try:
+                idx = _task_story_index(nxt)
+                sm = ((state.get("project") or {}).get("asset_imgs") or {}).get("story") or {}
+                if idx is not None:
+                    story = str(sm.get(str(idx)) or sm.get(idx) or "").strip()
+            except Exception:
+                story = story or ""
+        # 链式提示词：末帧锁首帧；分镜管本段要演的内容
         chain_prompt = str(nxt.get("prompt") or "")
-        # 若曾被转成六段式，I2V 仍可用正文；补强硬接说明
-        if "上一段末帧" not in chain_prompt and "<Picture 1>" not in chain_prompt[:80]:
+        if "上一段末帧" not in chain_prompt:
             chain_prompt = (
                 "第 0.00 秒首帧必须与上一段末帧完全一致（场景、人物位置、姿势与光线），不得跳切。"
                 + (" " + chain_prompt if chain_prompt else "")
             )
-        if use_story and story:
-            if "过程参考" not in chain_prompt:
-                chain_prompt = chain_prompt + (
-                    f" 本段分镜「{story}」仅作过程参考：从首帧之后按本段提示词自然发展动作、机位与场景内容，"
-                    "逐渐展现分镜所描绘的情节与人物关系；分镜不是首帧构图，也不强制以分镜画面定格收尾。"
-                )
-        elif chain_prompt and "不切换场景" not in chain_prompt:
+        if use_story and story and "过程参考" not in chain_prompt:
             chain_prompt = chain_prompt + (
-                " 整段画面保持单一场景，不出现场景切换、不出现其他地点。"
+                " 从该首帧之后，按本段分镜图与提示词自然发展动作、机位与场景内容；"
+                "分镜不是首帧，也不强制以分镜定格收尾。"
             )
         sys.path.insert(0, DEFAULT_WORKFLOW_DIR)
         try:
@@ -1633,24 +1726,58 @@ def advance_chain(server, state):
         except Exception as e:
             print(f"[chain] 加载 build_api_graphs 失败：{e}")
             continue
-        # 硬接只用 I2V：首帧图 = 链帧；分镜不进 images
-        task = {
-            "id": nxt["id"],
-            "name": nxt.get("name", nxt["id"]),
-            "mode": "i2v",
-            "prompt": ensure_i2v_prompt(chain_prompt),
-            "quality": nxt.get("quality"),
-            "steps": nxt.get("steps"),
-            "duration": nxt.get("duration", 10),
-            "mp": nxt.get("mp", 1.0),
-            "prefix": nxt.get("prefix", ""),
-            "image": chain_img,
-            "story_image": story or nxt.get("story_image"),
-            "ref_video": nxt.get("ref_video"),
-            "seed": random.randrange(10 ** 15),
-        }
-        build_fn = bg.build_i2v
-        submit_mode = "i2v"
+        if use_story and story:
+            # 第2段起每段都一样：只给模型 2 张图（末帧 + 本段分镜），避免角色多视图抢戏
+            lp = find_image(story)
+            if lp:
+                try:
+                    upload_image(server, lp, story)
+                except Exception as e:
+                    print(f"[chain] 上传分镜失败 {story}: {e}")
+            r2v_cfg = (_CONFIG.get("models") or {}).get("r2v") or {}
+            ref_imgs = [chain_img, story]
+            task = {
+                "id": nxt["id"],
+                "name": nxt.get("name", nxt["id"]),
+                "mode": "r2v",
+                "prompt": chain_prompt,
+                "quality": nxt.get("quality"),
+                "steps": nxt.get("steps"),
+                "duration": nxt.get("duration", 10),
+                "mp": nxt.get("mp", 1.0),
+                "prefix": nxt.get("prefix", ""),
+                "images": ref_imgs,
+                "story_image": story,
+                "ref_video": nxt.get("ref_video"),
+                "seed": random.randrange(10 ** 15),
+                "r2v_unet": nxt.get("r2v_unet") or r2v_cfg.get("unet"),
+                "r2v_clip": nxt.get("r2v_clip") or r2v_cfg.get("clip"),
+                "roles": nxt.get("roles"),
+                "scene": nxt.get("scene"),
+            }
+            task["prompt"] = to_ref2va_six_section(task["prompt"], task)
+            build_fn = bg.build_r2v
+            submit_mode = "r2v"
+        else:
+            # 没有分镜或选了仅末帧：I2V 硬接
+            task = {
+                "id": nxt["id"],
+                "name": nxt.get("name", nxt["id"]),
+                "mode": "i2v",
+                "prompt": ensure_i2v_prompt(chain_prompt),
+                "quality": nxt.get("quality"),
+                "steps": nxt.get("steps"),
+                "duration": nxt.get("duration", 10),
+                "mp": nxt.get("mp", 1.0),
+                "prefix": nxt.get("prefix", ""),
+                "image": chain_img,
+                "story_image": nxt.get("story_image"),
+                "ref_video": nxt.get("ref_video"),
+                "seed": random.randrange(10 ** 15),
+            }
+            build_fn = bg.build_i2v
+            submit_mode = "i2v"
+            ref_imgs = []
         try:
             g = build_fn(task)
             resp = api_post(server, "/prompt", {"prompt": g, "client_id": "batch_console"})
@@ -1667,13 +1794,13 @@ def advance_chain(server, state):
         nxt["image"] = chain_img
         nxt["mode"] = submit_mode
         nxt["chain_style"] = chain_style
-        nxt["images"] = []
+        nxt["images"] = [story] if (use_story and story) else []
         if story:
             nxt["story_image"] = story
         t["chain_done"] = True
         changed = True
-        tag = "i2v+分镜提示" if use_story else "i2v"
-        print(f"[chain] {t.get('name')} → {nxt.get('name')} 已提交（{pid}，{chain_style}/{tag}）")
+        tag = f"r2v末帧+分镜" if submit_mode == "r2v" else "i2v"
+        print(f"[chain] {t.get('name')} → {nxt.get('name')} 已提交（{pid}，{tag}，refs={ref_imgs or [chain_img]}）")
     return changed
 
 
