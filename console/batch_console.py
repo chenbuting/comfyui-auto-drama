@@ -1142,7 +1142,7 @@ def _seg_identity_refs(state, task=None, index=None):
 
 
 def _pack_chain_video_refs(chain_img, story, identity_refs, max_n=8):
-    """视频参考图顺序：末帧 → 角色正脸/正面 → 场景 → 分镜。坑不够先丢场景。"""
+    """链式视频参考图：末帧 → 场景（可选）→ 分镜。不带角色正脸。"""
     chain_img = str(chain_img or "").strip()
     story = str(story or "").strip()
     ids = []
@@ -1279,7 +1279,7 @@ def regen_bridge_storyboard(last_frame_png, nxt, state=None):
 
 def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None, chain_style="frame_story"):
     warnings = []
-    # chain_style: frame=仅末帧 I2V；frame_story=末帧+角色正脸+分镜 R2V
+    # chain_style: frame=仅末帧 I2V；frame_story=末帧+分镜 R2V（第2段起不带角色正脸）
     chain_style = str(chain_style or "frame_story").strip() or "frame_story"
     if chain_style not in ("frame", "frame_story"):
         chain_style = "frame_story"
@@ -1732,19 +1732,34 @@ def advance_chain(server, state):
             continue
         if not nxt.get("chain_waiting") or nxt.get("prompt_id"):
             continue
-        # 按 chain_prev 找上一段；若该段已经接过（chain_done），改接最近完成的前一段
+        # 按 chain_prev 找上一段。重生成第 N 段时，即使上一段已经接过旧版，仍用紧邻上一段末帧。
         t = by_id.get(nxt.get("chain_prev")) if nxt.get("chain_prev") else None
         if t is None and i > 0:
             t = tasks[i - 1]
         if t is not None and t.get("chain_done"):
-            t = None
-            for j in range(i - 1, -1, -1):
-                prev = tasks[j]
-                if prev.get("output_file") and not prev.get("error"):
-                    t = prev
-                    t["chain_done"] = False
-                    nxt["chain_prev"] = prev.get("id")
-                    break
+            nxt_seg = _task_seg_num(nxt.get("name"))
+            prev_seg = _task_seg_num(t.get("name"))
+            same = _task_title_key(nxt.get("name")) == _task_title_key(t.get("name"))
+            if (
+                same
+                and nxt_seg
+                and prev_seg == nxt_seg - 1
+                and t.get("output_file")
+                and not t.get("error")
+            ):
+                t["chain_done"] = False
+            else:
+                t = None
+                prefix = _task_title_key(nxt.get("name"))
+                for j in range(i - 1, -1, -1):
+                    prev = tasks[j]
+                    if _task_title_key(prev.get("name")) != prefix:
+                        continue
+                    if prev.get("output_file") and not prev.get("error"):
+                        t = prev
+                        t["chain_done"] = False
+                        nxt["chain_prev"] = prev.get("id")
+                        break
         if t is None:
             continue
         if t.get("chain_done"):
@@ -1873,12 +1888,14 @@ def advance_chain(server, state):
             bridged = regen_bridge_storyboard(png, nxt, state)
             if bridged:
                 story = bridged
-        identity_fns, _ = _seg_identity_refs(state, nxt)
+        # 第2段起视频不带角色正脸：人已画进分镜，再塞大头照会抢末帧
+        _, scene_fn = _seg_identity_refs(state, nxt)
+        chain_extra = [scene_fn] if scene_fn else []
         try:
             max_n = int((_CONFIG.get("console") or {}).get("max_ref_images") or 8)
         except Exception:
             max_n = 8
-        # 链式提示词：末帧锁首帧；锚点锁人；分镜管本段要演的内容
+        # 链式提示词：末帧锁首帧；分镜管本段要演的内容和外貌
         chain_prompt = str(nxt.get("prompt") or "")
         if "上一段末帧" not in chain_prompt:
             chain_prompt = (
@@ -1888,7 +1905,7 @@ def advance_chain(server, state):
         if use_story and story and "过程参考" not in chain_prompt:
             chain_prompt = chain_prompt + (
                 " 从该首帧之后，按本段分镜图与提示词自然发展动作、机位与场景内容；"
-                "人物外貌必须与角色锚点参考图同一人；分镜不是首帧，也不强制以分镜定格收尾。"
+                "人物外貌必须与本段分镜图中的同一人；分镜不是首帧，也不强制以分镜定格收尾。"
             )
         sys.path.insert(0, DEFAULT_WORKFLOW_DIR)
         try:
@@ -1897,7 +1914,7 @@ def advance_chain(server, state):
             print(f"[chain] 加载 build_api_graphs 失败：{e}")
             continue
         if use_story and story:
-            ref_imgs = _pack_chain_video_refs(chain_img, story, identity_fns, max_n)
+            ref_imgs = _pack_chain_video_refs(chain_img, story, chain_extra, max_n)
             for img in ref_imgs:
                 if img == chain_img:
                     continue
@@ -2028,6 +2045,13 @@ def _task_version(name):
 def _task_seg_num(name):
     m = re.search(r"_(\d+)(?:_v\d+)?$", str(name or ""))
     return int(m.group(1)) if m else 0
+
+
+def _task_title_key(name):
+    """雨巷交刀_02_v3 → 雨巷交刀，用来判断是不是同一条片子。"""
+    n = re.sub(r"_v\d+$", "", str(name or ""))
+    n = re.sub(r"_\d+$", "", n)
+    return n
 
 
 def _task_done(t):

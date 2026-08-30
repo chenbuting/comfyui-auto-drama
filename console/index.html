@@ -420,7 +420,7 @@
           </select>
         </label>
         <div class="hint" style="font-size:11px;margin:2px 0 8px 0;width:100%">
-          第2段起：按上一段真实末帧重画衔接分镜（人跟角色锚点图一致），再把「末帧 + 角色正脸 + 场景 + 新分镜」一起交给模型。段与段之间会多等一两分钟画分镜。
+          第2段起：按上一段真实末帧重画衔接分镜（画分镜仍用角色锚点），视频只给「末帧 + 场景 + 新分镜」，不再带正脸，避免和大头照抢戏。段与段之间会多等一两分钟画分镜。
         </div>
         <label style="font-size:13px"><input type="checkbox" id="qualityMode" checked> 🎧 成片质量（无加速LoRA·20步，声音清晰，慢）</label>
         <label style="font-size:13px">步数
@@ -1364,12 +1364,13 @@ function effectiveRefs(i) {
   const scene = (seg.scene && assetImgs.scene[seg.scene]) ? assetImgs.scene[seg.scene] : '';
   const manuals = [$('roleImage1').value, $('roleImage2').value, $('sceneImage').value].filter(Boolean);
 
-  // 只带正面/正脸锁人，侧背不占坑，给分镜和场景留位
+  // 第2段起链式视频不带角色正脸（分镜已按锚点画过）；第1段仍带正脸锁开场
+  const skipRoleAnchors = !!( $('chainMode') && $('chainMode').checked && i > 0 );
   const roleItems = [];
   const viewPri = { front: 0, face: 1 };
   roles.forEach(r => {
     const n = r.role_name || r.name;
-    if (!n) return;
+    if (!n || skipRoleAnchors) return;
     if (segRoles.size && !segRoles.has(n)) return;
     const views = ((assetImgs.roleViews && assetImgs.roleViews[n]) || {});
     let any = false;
