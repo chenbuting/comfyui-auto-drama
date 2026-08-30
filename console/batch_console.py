@@ -1883,11 +1883,15 @@ def _advance_chain_inner(server, state):
             ):
                 t["chain_done"] = False
             else:
+                # 只找紧邻上一段（02 接 01、03 接 02），禁止用 01 同时开 03/04
                 t = None
                 prefix = _task_title_key(nxt.get("name"))
+                want = (nxt_seg - 1) if nxt_seg else None
                 for j in range(i - 1, -1, -1):
                     prev = tasks[j]
                     if _task_title_key(prev.get("name")) != prefix:
+                        continue
+                    if want and _task_seg_num(prev.get("name")) != want:
                         continue
                     if prev.get("output_file") and not prev.get("error"):
                         t = prev
@@ -1899,6 +1903,9 @@ def _advance_chain_inner(server, state):
         if t.get("chain_done"):
             continue
         if not t.get("prompt_id"):
+            continue
+        nxt_seg = _task_seg_num(nxt.get("name"))
+        if not nxt_seg or _task_seg_num(t.get("name")) != nxt_seg - 1:
             continue
         # 上一段失败/超时：标记跳过，链条继续（下一段降级 T2V 或用更早成功帧）
         if t.get("error"):
@@ -1942,7 +1949,7 @@ def _advance_chain_inner(server, state):
                             nxt["image"] = chain_img
                             changed = True
                             print(f"[chain] {t.get('name')} 失败跳过，{nxt.get('name')} 用 {ref.get('name')} 末帧续接（{pid}）")
-                            continue
+                            return True
                     except Exception as e:
                         print(f"[chain] 失败跳过续接异常：{e}")
             # 无可用参考帧 → 降级 T2V 直接提交
@@ -1967,6 +1974,7 @@ def _advance_chain_inner(server, state):
                     nxt["image"] = ""
                     changed = True
                     print(f"[chain] {t.get('name')} 失败跳过，{nxt.get('name')} 降级 T2V 提交（{pid}）")
+                    return True
             except Exception as e:
                 print(f"[chain] 降级提交异常：{e}")
             continue
@@ -2126,6 +2134,7 @@ def _advance_chain_inner(server, state):
         changed = True
         tag = f"r2v末帧+分镜" if submit_mode == "r2v" else "i2v"
         print(f"[chain] {t.get('name')} → {nxt.get('name')} 已提交（{pid}，{tag}，refs={ref_imgs or [chain_img]}）")
+        return True
     return changed
 
 
@@ -2313,7 +2322,7 @@ def resume_from_breakpoint(server=None):
                 t.pop(k, None)
             t["chain_waiting"] = True
             t["paused_by_user"] = False
-            t["chain_prev"] = batch[last_done_i].get("id")
+            t["chain_prev"] = batch[i - 1].get("id")
             if not t.get("chain_style"):
                 t["chain_style"] = state.get("chain_style") or "frame_story"
 
