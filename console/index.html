@@ -1468,14 +1468,19 @@ function pill(status) {
   return `<span class="pill ${status}">${map[status] || status}</span>`;
 }
 function fmtDur(sec) { if (sec == null) return '—'; return `${Math.floor(sec/60)}分${String(sec%60).padStart(2,'0')}秒`; }
+function videoPreview(filename, extraStyle) {
+  const src = `/media/${encodeURIComponent(filename)}`;
+  const style = extraStyle || 'width:100%;border-radius:8px;margin-top:6px;background:#111';
+  return `<video src="${src}" poster="${src}?poster=1" controls preload="metadata" style="${style}"></video>`;
+}
 
 async function refreshStatus() {
   const server = $('serverInput').value.trim();
   try {
     const r = await fetch(`/api/status?server=${encodeURIComponent(server)}`);
     const d = await r.json();
-    if (!d.server_ok) { $('statusCards').innerHTML = '<div class="empty">⚠️ 服务器连接异常</div>'; return; }
-    if (!d.tasks.length) { $('statusCards').innerHTML = '<div class="empty"><div class="big">🎬</div>还没有任务，提交后这里显示状态</div>'; return; }
+    if (!d.server_ok) { statusCardsFp = ''; $('statusCards').innerHTML = '<div class="empty">⚠️ 服务器连接异常</div>'; return; }
+    if (!d.tasks.length) { statusCardsFp = ''; $('statusCards').innerHTML = '<div class="empty"><div class="big">🎬</div>还没有任务，提交后这里显示状态</div>'; return; }
     statusTasksCache = d.tasks;
     const hint = $('chainPauseHint');
     if (hint) {
@@ -1491,20 +1496,32 @@ async function refreshStatus() {
   } catch (e) { $('statusCards').innerHTML = '<div class="empty">状态刷新失败</div>'; }
 }
 
+let statusCardsFp = '';
 function renderStatusCards() {
   const tasks = statusTasksCache;
   if (!tasks.length) return;
   if (statusPage * statusPageSize >= tasks.length) statusPage = 0;
   const pages = Math.ceil(tasks.length / statusPageSize);
   const show = tasks.slice(statusPage * statusPageSize, (statusPage + 1) * statusPageSize);
+  const fp = JSON.stringify(show.map(t => ({
+    id: t.id, status: t.status, downloaded: t.downloaded, error: t.error,
+    outputs: t.outputs, fc: t.failure_code, name: t.name,
+  })));
+  // 状态没变就只改耗时，避免 8 秒刷新把已有预览拆掉变成黑屏
+  if (fp === statusCardsFp && $('statusCards').querySelector('[data-task-id]')) {
+    show.forEach(t => {
+      const meta = document.querySelector(`[data-task-id="${CSS.escape(t.id)}"] .meta`);
+      if (meta) meta.textContent = `${(t.mode || '').toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}`;
+    });
+    return;
+  }
+  statusCardsFp = fp;
   $('statusCards').innerHTML = `<div class="cards">${show.map(t => {
       const active = ['running', 'queued', 'waiting'].includes(t.status);
       const spin = active ? '<span class="spin"></span>' : '';
       const outs = (t.outputs || []).map(o => {
         const isVideo = /\.(mp4|webm|mov)$/i.test(o.filename || '');
-        const vid = (isVideo && t.downloaded)
-        ? `<video src="/media/${encodeURIComponent(o.filename)}" controls preload="none" style="width:100%;border-radius:8px;margin-top:6px;background:#000"></video>`
-          : '';
+        const vid = (isVideo && t.downloaded) ? videoPreview(o.filename) : '';
         const dl = (isVideo && !t.downloaded)
           ? ` <a href="/media/${encodeURIComponent(o.filename)}" download style="color:var(--blue)">下载预览</a>`
           : '';
@@ -1520,14 +1537,14 @@ function renderStatusCards() {
       const regen = t.status === 'completed'
         ? `<button class="btn" style="padding:3px 8px;font-size:11px;color:var(--blue)" onclick="regenerateVideo('${escAttr(t.id)}')">🔄 重新生成</button>`
         : '';
-      return `<div class="card-item${active ? ' generating' : ''}"><div class="r1"><span class="name">${esc(t.name)}</span><span style="display:flex;align-items:center;gap:7px">${spin}${pill(t.status)}</span></div>
+      return `<div class="card-item${active ? ' generating' : ''}" data-task-id="${escAttr(t.id)}"><div class="r1"><span class="name">${esc(t.name)}</span><span style="display:flex;align-items:center;gap:7px">${spin}${pill(t.status)}</span></div>
         <div class="meta">${t.mode.toUpperCase()} · ${t.duration}s · ${t.mp}MP · ${fmtDur(t.elapsed_sec)}</div>${outs}${err}
         <div class="row" style="margin-top:8px">${regen}${del}</div></div>`;
     }).join('')}</div>`
     + (pages > 1 ? `<div class="row" style="margin-top:10px;justify-content:center;gap:12px;align-items:center">
-        <button class="btn" ${statusPage === 0 ? 'disabled' : ''} onclick="statusPage>0&&(statusPage--,renderStatusCards())">← 上一页</button>
+        <button class="btn" ${statusPage === 0 ? 'disabled' : ''} onclick="statusPage>0&&(statusPage--,statusCardsFp='',renderStatusCards())">← 上一页</button>
         <span class="hint">第 ${statusPage * statusPageSize + 1}-${Math.min((statusPage + 1) * statusPageSize, tasks.length)} / ${tasks.length} 个任务</span>
-        <button class="btn" ${statusPage >= pages - 1 ? 'disabled' : ''} onclick="statusPage<${pages - 1}&&(statusPage++,renderStatusCards())">下一页 →</button>
+        <button class="btn" ${statusPage >= pages - 1 ? 'disabled' : ''} onclick="statusPage<${pages - 1}&&(statusPage++,statusCardsFp='',renderStatusCards())">下一页 →</button>
       </div>` : '');
 }
 function startPoll() {
@@ -1652,7 +1669,7 @@ async function assemble() {
             ? `完成 ${pd.total} 段，跳过 ${sk.length} 段（${sk.join('、')}）`
             : `完成 ${pd.total || '全部'} 段`;
           $('assembleResult').innerHTML = `
-            <video src="/media/${encodeURIComponent(pd.filename)}" controls preload="none" style="width:100%;max-height:480px;border-radius:10px;background:#000"></video>
+            ${videoPreview(pd.filename, 'width:100%;max-height:480px;border-radius:10px;background:#111')}
             <div class="hint" style="margin-top:8px">✅ ${esc(pd.filename)}
               <a href="/media/${encodeURIComponent(pd.filename)}" download style="color:var(--blue)">下载</a></div>`;
           toast('🎬 合成完成');
@@ -1771,7 +1788,7 @@ function renderAssembleHistory() {
           <div class="card-item">
             <div class="r1"><span class="name" style="font-size:12px">${esc(f.filename)}</span></div>
             <div class="meta">${esc(f.mtime)} · ${(f.size / 1048576).toFixed(1)}MB</div>
-            <video src="/media/${encodeURIComponent(f.filename)}" controls preload="none" style="width:100%;border-radius:8px;max-height:220px;background:#000"></video>
+            ${videoPreview(f.filename, 'width:100%;border-radius:8px;max-height:220px;background:#111')}
             <div class="row" style="margin-top:6px">
               <a href="/media/${encodeURIComponent(f.filename)}" download style="color:var(--blue);font-size:12px">⬇️ 下载</a>
               <label style="font-size:11px;color:var(--muted);display:flex;align-items:center;gap:3px">

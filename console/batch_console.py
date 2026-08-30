@@ -1024,6 +1024,58 @@ def enhance_prompt(prompt, task=None):
     return p.strip()
 
 
+def extract_video_poster(video_path):
+    """抽约 0.4 秒一帧当预览封面，缓存在视频旁边（中文路径先拷到临时目录再抽）。"""
+    if not video_path or not os.path.isfile(video_path):
+        return None
+    cache = video_path + ".poster.jpg"
+    try:
+        if os.path.isfile(cache) and os.path.getsize(cache) > 80:
+            if os.path.getmtime(cache) >= os.path.getmtime(video_path) - 1:
+                return cache
+    except Exception:
+        pass
+    tmpdir = tempfile.mkdtemp(prefix="poster_")
+    tmp_video = os.path.join(tmpdir, "in.mp4")
+    out_jpg = os.path.join(tmpdir, "poster.jpg")
+    try:
+        shutil.copy(video_path, tmp_video)
+        r = _run_cmd(
+            ["ffmpeg", "-y", "-ss", "0.4", "-i", tmp_video, "-frames:v", "1", "-q:v", "4", out_jpg],
+            capture_output=True,
+        )
+        if r.returncode != 0 or not os.path.isfile(out_jpg):
+            r = _run_cmd(
+                ["ffmpeg", "-y", "-i", tmp_video, "-frames:v", "1", "-q:v", "4", out_jpg],
+                capture_output=True,
+            )
+        if r.returncode != 0 or not os.path.isfile(out_jpg):
+            return None
+        shutil.copyfile(out_jpg, cache)
+        return cache
+    except Exception as e:
+        print(f"[poster] 抽封面失败：{e}")
+        return None
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def find_media_file(filename):
+    """按文件名找素材目录或输出目录里的媒体文件。"""
+    fn = os.path.basename(str(filename or "").replace("\\", "/"))
+    if not fn or fn in (".", ".."):
+        return None
+    for d in IMAGE_DIRS:
+        p = os.path.join(d, fn)
+        if os.path.isfile(p):
+            return p
+    if os.path.isdir(OUTPUTS_DIR):
+        for root, _, files in os.walk(OUTPUTS_DIR):
+            if fn in files:
+                return os.path.join(root, fn)
+    return None
+
+
 def extract_last_frame(video_path):
     """ffmpeg 抽视频最后一帧 → 返回临时 PNG 路径（ASCII 目录）。"""
     tmpdir = tempfile.mkdtemp(prefix="chain_")
@@ -1494,7 +1546,17 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
         results.append({"id": base_tid, "ok": True, "task_id": tid, "prompt_id": pid, "waiting": is_chain_waiting})
         prev_new_tid = tid
     state["chain_style"] = chain_style
+    # 新提交视为重新开跑，清掉旧的「已停止」，否则 01 做完后 02 不会接着交
+    if any(x.get("ok") for x in results):
+        state["chain_control"] = {
+            "paused": False,
+            "pause_reason": "",
+            "last_cloud_fail_at": 0,
+            "cloud_ok_since": time.time(),
+        }
     save_state(state)
+    if chain_mode and any(x.get("ok") for x in results):
+        _ensure_chain_daemon()
     return results, None, warnings
 
 
@@ -4792,37 +4854,38 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(boogu_check(), ensure_ascii=False))
             return
         if path.path.startswith("/media/"):
-            fn = urllib.parse.unquote(path.path[len("/media/"):])
-            for d in IMAGE_DIRS:
-                p = os.path.join(d, fn)
-                if os.path.isfile(p):
-                    ctype = "image/png"
-                    if fn.lower().endswith((".jpg", ".jpeg")):
-                        ctype = "image/jpeg"
-                    elif fn.lower().endswith(".webp"):
-                        ctype = "image/webp"
-                    elif fn.lower().endswith(".mp4"):
-                        ctype = "video/mp4"
-                    if ctype.startswith("video/"):
-                        self._send_media(p, ctype)
-                    else:
-                        with open(p, "rb") as f:
-                            data = f.read()
-                        self._send(200, data, ctype)
+            fn = os.path.basename(urllib.parse.unquote(path.path[len("/media/"):]).replace("\\", "/"))
+            p = find_media_file(fn)
+            if not p:
+                self._send(404, "not found", "text/plain; charset=utf-8")
+                return
+            want_poster = (urllib.parse.parse_qs(path.query).get("poster") or [""])[0] in ("1", "true", "yes")
+            if want_poster and fn.lower().endswith((".mp4", ".webm", ".mov", ".mkv")):
+                poster = extract_video_poster(p)
+                if poster:
+                    with open(poster, "rb") as f:
+                        data = f.read()
+                    self._send(200, data, "image/jpeg")
                     return
-            # 生成视频：递归查 outputs 目录
-            if os.path.isdir(OUTPUTS_DIR):
-                for root, _, files in os.walk(OUTPUTS_DIR):
-                    if fn in files:
-                        p = os.path.join(root, fn)
-                        ctype = "video/mp4"
-                        if fn.lower().endswith(".webm"):
-                            ctype = "video/webm"
-                        elif fn.lower().endswith(".mov"):
-                            ctype = "video/quicktime"
-                        self._send_media(p, ctype)
-                        return
-            self._send(404, "not found", "text/plain; charset=utf-8")
+                self._send(404, "poster failed", "text/plain; charset=utf-8")
+                return
+            ctype = "image/png"
+            if fn.lower().endswith((".jpg", ".jpeg")):
+                ctype = "image/jpeg"
+            elif fn.lower().endswith(".webp"):
+                ctype = "image/webp"
+            elif fn.lower().endswith(".mp4"):
+                ctype = "video/mp4"
+            elif fn.lower().endswith(".webm"):
+                ctype = "video/webm"
+            elif fn.lower().endswith(".mov"):
+                ctype = "video/quicktime"
+            if ctype.startswith("video/"):
+                self._send_media(p, ctype)
+            else:
+                with open(p, "rb") as f:
+                    data = f.read()
+                self._send(200, data, ctype)
             return
         if path.path == "/api/records":
             rows = []
