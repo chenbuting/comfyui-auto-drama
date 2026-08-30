@@ -1279,6 +1279,21 @@ def regen_bridge_storyboard(last_frame_png, nxt, state=None):
 
 def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_images=None, scene_image=None, chain_style="frame_story"):
     warnings = []
+    # 这批还在跑/等待时禁止再交一遍，避免同一段生成多次
+    _st0 = load_state()
+    incoming_keys = {_task_title_key(t.get("name")) for t in (tasks or []) if t.get("name")}
+    busy = []
+    for x in _st0.get("tasks") or []:
+        if _task_title_key(x.get("name")) not in incoming_keys:
+            continue
+        if x.get("error") or x.get("paused_by_user"):
+            continue
+        running = bool(x.get("prompt_id") and not x.get("output_file") and not x.get("downloaded"))
+        waiting = bool(x.get("chain_waiting") and not x.get("prompt_id"))
+        if running or waiting:
+            busy.append(x.get("name") or x.get("id"))
+    if busy:
+        return None, "这批还在生成或等待上一段，请不要再点提交。等全部完成后再交。", warnings
     # chain_style: frame=仅末帧 I2V；frame_story=末帧+分镜 R2V（第2段起不带角色正脸）
     chain_style = str(chain_style or "frame_story").strip() or "frame_story"
     if chain_style not in ("frame", "frame_story"):
@@ -1719,18 +1734,73 @@ def get_status(server):
     }
 
 
+def _chain_lock_path():
+    return os.path.join(BASE_DIR, "chain.lock")
+
+
+def _acquire_chain_lock():
+    """防止页面刷新和守护进程同时提交下一段。"""
+    p = _chain_lock_path()
+    try:
+        fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode("ascii", "ignore"))
+        os.close(fd)
+        return True
+    except FileExistsError:
+        try:
+            age = time.time() - os.path.getmtime(p)
+            if age > 180:
+                os.remove(p)
+                return _acquire_chain_lock()
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return True
+
+
+def _release_chain_lock():
+    try:
+        os.remove(_chain_lock_path())
+    except Exception:
+        pass
+
+
 def advance_chain(server, state):
     """链式衔接：上一段完成并下载后，抽最后一帧上传，提交下一段。"""
     cc = state.get("chain_control") or {}
     if cc.get("paused"):
         return False
+    if not _acquire_chain_lock():
+        return False
+    try:
+        return _advance_chain_inner(server, state)
+    finally:
+        _release_chain_lock()
+
+
+def _advance_chain_inner(server, state):
     tasks = state.get("tasks", [])
     changed = False
     by_id = {t.get("id"): t for t in tasks}
     for i, nxt in enumerate(tasks):
         if nxt.get("paused_by_user"):
             continue
-        if not nxt.get("chain_waiting") or nxt.get("prompt_id"):
+        if not nxt.get("chain_waiting") or nxt.get("prompt_id") or nxt.get("output_file") or nxt.get("downloaded"):
+            continue
+        # 同名同段已经交过或做完，不再重交
+        nxt_key = _task_title_key(nxt.get("name"))
+        nxt_seg = _task_seg_num(nxt.get("name"))
+        already = any(
+            x is not nxt
+            and _task_title_key(x.get("name")) == nxt_key
+            and _task_seg_num(x.get("name")) == nxt_seg
+            and not x.get("error")
+            and (x.get("prompt_id") or x.get("output_file") or x.get("downloaded"))
+            for x in tasks
+        )
+        if already:
+            nxt["chain_waiting"] = False
             continue
         # 按 chain_prev 找上一段。重生成第 N 段时，即使上一段已经接过旧版，仍用紧邻上一段末帧。
         t = by_id.get(nxt.get("chain_prev")) if nxt.get("chain_prev") else None
@@ -1740,6 +1810,8 @@ def advance_chain(server, state):
             nxt_seg = _task_seg_num(nxt.get("name"))
             prev_seg = _task_seg_num(t.get("name"))
             same = _task_title_key(nxt.get("name")) == _task_title_key(t.get("name"))
+            if nxt.get("prompt_id") or nxt.get("output_file") or nxt.get("downloaded"):
+                continue
             if (
                 same
                 and nxt_seg
@@ -4436,6 +4508,43 @@ def parse_script_json(text):
     return rows, meta
 
 
+def script_object_from_json(text):
+    """把导入的剧本 JSON 还原成控制台表格用的 script（场景/对白/动作等）。"""
+    text = _clean_json_text(text)
+    data = json.loads(text)
+    if isinstance(data, list):
+        data = {"title": "剧本", "storyboard_list": data}
+    if not isinstance(data, dict):
+        return None
+    role_map = _extract_roles(data)
+    role_list = [
+        {"role_name": r["role_name"], "role_desc": r.get("role_desc") or ""}
+        for r in role_map.values()
+    ]
+    storyboard_list = []
+    for i, sb in enumerate(_extract_storyboards(data)):
+        storyboard_list.append({
+            "id": i + 1,
+            "scene": str(_pick(sb, "scene", "location", "place", "scene_name") or "").strip(),
+            "roles": _sb_roles(sb),
+            "action": str(_pick(sb, "action", "acting", "video_action") or "").strip(),
+            "dialogue": str(_pick(sb, "dialogue", "line", "lines") or "").strip(),
+            "emotion": str(_pick(sb, "emotion", "mood") or "").strip(),
+            "camera": str(_pick(sb, "camera", "shot") or "").strip(),
+            "duration": _sb_duration(sb, default=6),
+        })
+    if not storyboard_list:
+        return None
+    return {
+        "title": str(_pick(data, "title", "name", "script_name") or "").strip() or "剧本",
+        "logline": str(_pick(data, "logline", "summary") or "").strip(),
+        "type": str(_pick(data, "type") or "").strip(),
+        "aspect": str(_pick(data, "aspect") or "").strip(),
+        "role_list": role_list,
+        "storyboard_list": storyboard_list,
+    }
+
+
 def _clean_json_text(text):
     """清理用户粘贴的剧本文本：去 BOM、剥 markdown 代码块、去首尾空白。"""
     s = str(text or "").strip()
@@ -4665,11 +4774,13 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps(check_lmstudio(), ensure_ascii=False))
             return
         if path.path == "/api/config":
-            # 用户运行时保存的服务器优先于配置文件（防止配置化把已连通的地址改丢）
-            cfg = _CONFIG
+            # 每次从磁盘读，避免进程启动后改 config.json 不生效
+            cfg = load_config()
             try:
                 st0 = load_state()
-                if st0.get("server"):
+                st_server = (st0.get("server") or "").strip().rstrip("/")
+                # 本机默认地址不当成“用户已保存”，避免盖掉 config 里的远程地址
+                if st_server and st_server not in ("http://127.0.0.1:8188", "http://localhost:8188"):
                     cfg = dict(cfg)
                     cfg["comfyui"] = dict(cfg.get("comfyui") or {})
                     cfg["comfyui"]["server"] = st0["server"]
@@ -5050,7 +5161,12 @@ class Handler(BaseHTTPRequestHandler):
             if not rows:
                 self._send(400, json.dumps({"error": meta.get("warnings", ["剧本为空"])[0]}, ensure_ascii=False))
                 return
-            self._send(200, json.dumps({"tasks": rows, **meta}, ensure_ascii=False))
+            script = None
+            try:
+                script = script_object_from_json(text)
+            except Exception:
+                script = None
+            self._send(200, json.dumps({"tasks": rows, "script": script, **meta}, ensure_ascii=False))
             return
         if path == "/api/expand_script":
             text = body.get("text", "")
