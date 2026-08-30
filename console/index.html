@@ -354,7 +354,7 @@
       <h3 style="font-size:14px;margin:16px 0 10px">🎬 分镜图（每段故事板）</h3>
       <label style="font-size:12px;color:var(--muted);margin-bottom:10px;display:inline-block">
         <input type="checkbox" id="storyAiPrompt" checked> 🤖 AI 按剧情生成规范提示词（更符合情节，略慢）
-        <div class="hint" style="font-size:11px;margin:4px 0 0;width:100%">第 2 段起会自动接着上一段结尾画，不要另起一张海报。重做时请按顺序点分镜 2→3→4…</div>
+        <div class="hint" style="font-size:11px;margin:4px 0 0;width:100%">每段只画一张完整画面，不要四格漫画。第 2 段起场景人物接着上一段。重做时请按顺序点分镜 2→3→4…</div>
       </label>
       <div id="storyAssets" class="grid"></div>
       <h3 style="font-size:14px;margin:16px 0 10px">🎥 参考视频（动作/风格参考）</h3>
@@ -2498,7 +2498,7 @@ function defaultStoryPrompt(i) {
   let bridge = '';
   if (i > 0) {
     const prev = (currentScript.storyboard_list || [])[i - 1] || {};
-    bridge = `【开场必须承接上一段结尾】上一段场景「${prev.scene || ''}」，动作到「${prev.action || ''}」结束。本图开头人物站位、景别、光线必须接着那个结尾，不要另起一张全新海报；然后才演本段动作。`;
+    bridge = `场景和人物接着上一段「${prev.scene || ''}」。只画本段进行中的一个瞬间，必须是一张完整的单一电影画面，禁止四格、连环画、漫画分格、拼图。`;
   }
   const parts = [];
   // 场景描述优先用资产状态表（与文字提示词同一来源，保证生图/出片一致）
@@ -2522,7 +2522,7 @@ function defaultStoryPrompt(i) {
     return `${n}（${bits || r.role_desc || ''}）`;
   }).join('；');
   const roleLine = roleDesc ? `画面人物形象必须与角色设定一致：${roleDesc}。` : '';
-  return (bridge ? bridge : '') + p + `电影感故事板分镜图，竖构图，${projectEraZh()}风格，写实。${roleLine}`
+  return (bridge ? bridge : '') + p + `电影感单帧分镜图，竖构图，${projectEraZh()}风格，写实。必须是一张完整的单一电影画面，禁止四格、连环画、漫画分格。${roleLine}`
     + `人物外貌必须与提供的角色锚点参考图完全同一人（五官、发型、服装），参考图只提供外貌，姿势构图按本段情节。`
     + `画面中严格只有剧本出现的 ${Math.max((currentScript.storyboard_list || [])[i] && ((currentScript.storyboard_list || [])[i].roles || []).length || 0, 1)} 个人，`
     + `绝对没有额外人物、没有多余的肢体/手臂/手从画面外伸入，每人四肢完整、各两只手、手指清晰不粘连，`
