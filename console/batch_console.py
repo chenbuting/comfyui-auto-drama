@@ -1796,14 +1796,10 @@ def get_status(server):
             except Exception:
                 pass
         out.append(item)
-    # 先落盘已完成/已下载，再推进下一段，避免生图卡住时完成状态丢了
+    # 状态查询只负责对账/下载，不在这里画分镜或交下一段（否则网页刷新会卡住）
     cc = state.get("chain_control") or {}
     if changed:
         save_state(state)
-        changed = False
-    if not cc.get("paused"):
-        if advance_chain(server, state):
-            save_state(state)
     # 排序：进行中的任务置顶（running > queued > waiting > paused > completed > error）
     def _status_rank(s):
         return {"running": 0, "queued": 1, "waiting": 2, "paused": 3, "completed": 4, "error": 5}.get(s, 6)
