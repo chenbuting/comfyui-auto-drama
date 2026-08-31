@@ -557,6 +557,27 @@ def start_assemble_job(project_name="", selection=None, seg_range=None):
 
 # ---------- 图构建与提交 ----------
 
+def _project_aspect(state=None, task=None):
+    """当前项目或任务上的画幅文案。"""
+    if task and task.get("aspect"):
+        return str(task.get("aspect"))
+    st = state if isinstance(state, dict) else None
+    if st is None:
+        try:
+            st = load_state()
+        except Exception:
+            st = {}
+    return str(((st or {}).get("project") or {}).get("aspect") or "竖版 1080×1920")
+
+
+def _frame_hint(state=None, task=None, aspect=None):
+    """分镜/生图用的构图提示。"""
+    a = aspect or _project_aspect(state, task)
+    if any(k in str(a) for k in ("横", "16:9", "1920")):
+        return "横构图 16:9"
+    return "竖构图 9:16"
+
+
 def build_graphs(tasks):
     if not os.path.isdir(DEFAULT_WORKFLOW_DIR):
         return None, f"找不到工作流目录：{DEFAULT_WORKFLOW_DIR}"
@@ -565,6 +586,7 @@ def build_graphs(tasks):
         import build_api_graphs as bg
     except Exception as e:
         return None, f"无法加载 build_api_graphs.py：{e}"
+    proj_aspect = _project_aspect()
     out = []
     for i, t in enumerate(tasks):
         try:
@@ -573,6 +595,7 @@ def build_graphs(tasks):
             task.setdefault("seed", random.randrange(10 ** 15))
             task.setdefault("mp", 1.0)
             task.setdefault("duration", 10)
+            task.setdefault("aspect", proj_aspect)
             if task.get("chain_waiting"):
                 g = None
             elif task["mode"] == "t2v":
@@ -1302,7 +1325,7 @@ def regen_bridge_storyboard(last_frame_png, nxt, state=None):
     identity, _ = _seg_identity_refs(st, nxt)
     ref_paths = _resolve_ref_paths([last_frame_png] + identity, limit=6)
     prompt = (
-        "电影感分镜图，竖构图 3:4，写实。"
+        f"电影感分镜图，{_frame_hint(st)}，写实。"
         "必须是一张完整的单一电影画面，只拍本段进行中的一个瞬间。"
         "禁止四格、连环画、漫画分格、拼图、同一张图里多个小画面或分栏。"
         "人物外貌必须与提供的角色参考图完全同一人（五官、发型、服装），"
@@ -1557,6 +1580,7 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
             "chain_prev": chain_prev_ref,
             "chain_done": False,
             "chain_style": chain_style,
+            "aspect": task.get("aspect") or str((state.get("project") or {}).get("aspect") or ""),
         })
         results.append({"id": base_tid, "ok": True, "task_id": tid, "prompt_id": pid, "waiting": is_chain_waiting})
         prev_new_tid = tid
@@ -2007,6 +2031,7 @@ def _advance_chain_inner(server, state):
                             "duration": nxt.get("duration", 10), "mp": nxt.get("mp", 1.0),
                             "prefix": nxt.get("prefix", ""), "image": chain_img,
                             "seed": random.randrange(10 ** 15),
+                            "aspect": nxt.get("aspect") or _project_aspect(state),
                         }
                         sys.path.insert(0, DEFAULT_WORKFLOW_DIR)
                         import build_api_graphs as bg
@@ -2033,6 +2058,7 @@ def _advance_chain_inner(server, state):
                     "duration": nxt.get("duration", 10), "mp": nxt.get("mp", 1.0),
                     "prefix": nxt.get("prefix", ""), "image": "",
                     "seed": random.randrange(10 ** 15),
+                    "aspect": nxt.get("aspect") or _project_aspect(state),
                 }
                 g = bg.convert_t2v(task)
                 resp = api_post(server, "/prompt", {"prompt": g, "client_id": "batch_console"})
@@ -2155,6 +2181,7 @@ def _advance_chain_inner(server, state):
                 "duration": nxt.get("duration", 10),
                 "mp": nxt.get("mp", 1.0),
                 "prefix": nxt.get("prefix", ""),
+                "aspect": nxt.get("aspect") or _project_aspect(state),
                 "images": ref_imgs,
                 "story_image": story,
                 "ref_video": nxt.get("ref_video"),
@@ -2183,6 +2210,7 @@ def _advance_chain_inner(server, state):
                 "story_image": nxt.get("story_image"),
                 "ref_video": nxt.get("ref_video"),
                 "seed": random.randrange(10 ** 15),
+                "aspect": nxt.get("aspect") or _project_aspect(state),
             }
             build_fn = bg.build_i2v
             submit_mode = "i2v"
@@ -3343,7 +3371,7 @@ STORY_PROMPT_SYSTEM = """你是爆款短剧分镜画师兼文生图提示词专�
 2. 角色形象：每个在场角色严格保持角色设定（性别/年龄/发型/服装），一字不差
 3. 情节动作：本段核心动作，具体可拍：谁、做什么、怎么动
 4. 情绪氛围：把情绪转成视觉（光线冷暖、色调、气氛词、构图松紧），禁止抽象情绪词
-5. 构图：按运镜给出画面构图（特写/中近景/双人同框/远景），竖构图 3:4
+5. 构图：按运镜给出画面构图（特写/中近景/双人同框/远景）；竖屏用竖构图 9:16，横屏用横构图 16:9
 6. 风格：1980s 中国乡村，电影感单帧分镜，写实，胶片质感
 7. 画面必须是一张完整的单一电影画面，只拍一个瞬间；禁止四格、连环画、漫画分格、拼图、同一张图里多个小画面
 8. 负面约束（必须保留）：画面中严格只有 N 个剧本角色，无第三人、无多余的肢体/手臂/手从画面外伸入，每人四肢完整各两只手、手指清晰不粘连，服装道具正常无穿帮，无文字乱码，无现代物品，无塑料包装盒，无饮料瓶
@@ -3508,12 +3536,22 @@ def _extract_json_obj(out):
             return None
 
 
-def llm_generate_script(topic, style="", segments=10, token=""):
+def llm_generate_script(topic, style="", segments=10, token="", genre="", budget_sec=0):
     """剧情梗概 → AI 生成完整剧本（role_list + storyboard_list）。"""
+    extra = []
+    if genre:
+        extra.append(f"类型：{genre}")
+    try:
+        sec = int(float(budget_sec or 0))
+    except Exception:
+        sec = 0
+    if sec > 0:
+        extra.append(f"全片总时长约 {sec} 秒，各段 duration 相加尽量接近这个数")
     user = (
         f"题材/梗概：{topic or ''}\n"
         f"风格要求：{style or '怀旧温情、1980s 中国乡村校园'}\n"
-        f"段数：{segments} 段左右\n"
+        + ("".join(x + "\n" for x in extra))
+        + f"段数：{segments} 段左右\n"
         "请创作完整剧本 JSON。"
     )
     resp = lmstudio_chat([
@@ -5568,6 +5606,11 @@ class Handler(BaseHTTPRequestHandler):
             topic = body.get("topic", "")
             style = body.get("style", "")
             segments = int(body.get("segments") or 10)
+            genre = str(body.get("genre") or "").strip()
+            try:
+                budget_sec = int(float(body.get("budget_sec") or 0))
+            except Exception:
+                budget_sec = 0
             token = _lm_token(body)
             if body.get("lmstudio_token"):
                 st = load_state()
@@ -5577,7 +5620,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": "请填写剧情梗概/题材"}, ensure_ascii=False))
                 return
             try:
-                script = llm_generate_script(topic, style, segments, token)
+                script = llm_generate_script(topic, style, segments, token, genre=genre, budget_sec=budget_sec)
             except Exception as e:
                 self._send(400, json.dumps({"error": f"剧本生成失败：{e}"}, ensure_ascii=False))
                 return
@@ -5833,11 +5876,12 @@ class Handler(BaseHTTPRequestHandler):
                     "场景和人物接着上一段，只画本段进行中的一个瞬间。"
                     "必须是单一完整电影画面，禁止四格、连环画、分格、拼图。\n"
                 )
+            frame = _frame_hint(aspect=str(body.get("aspect") or ""))
             user = (
                 "根据下面这个分镜生成分镜图提示词："
                 + extra
-                + "\n"
-                + json.dumps({"storyboard": sb, "roles": roles, "index": idx}, ensure_ascii=False, indent=1)
+                + f"\n构图要求：{frame}，必须是一张完整的单一电影画面。\n"
+                + json.dumps({"storyboard": sb, "roles": roles, "index": idx, "aspect": frame}, ensure_ascii=False, indent=1)
             )
             try:
                 # 只走当前配置的主端点，60 秒超时；失败立刻返回，不再降级死等本地模型

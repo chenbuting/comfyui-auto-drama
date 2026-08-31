@@ -76,6 +76,14 @@ WIDGET_MAP = {
     "MiniMaxH3ReferenceToVideo": ["format", "width", "height", "length", "ref_image_size"],
 }
 
+
+def _aspect_ratio_label(task):
+    """项目画幅 → ComfyUI ResolutionSelector 取值。"""
+    a = str((task or {}).get("aspect") or "")
+    if any(k in a for k in ("横", "16:9", "1920×1080", "1920x1080", "Landscape")):
+        return "16:9 (Widescreen)"
+    return "9:16 (Portrait Widescreen)"
+
 # ---------- 提示词（来自 MiniMax_H3_视频脚本.md，规则化） ----------
 
 PROMPT_T0_TITLE = """integrated_multimodal_description: [Shot 1] Cinematic 3D motion-graphics style, a deep space background with a dark-blue nebula and faint stars. Tiny glowing orange particles drift in from the edges and converge into the center, forming a single line of bold white text: "MINIMAX H3". A warm orange rim light sweeps across the letterforms as the text locks into place, then a smaller letterspaced grey line appears below it: "OPEN SOURCE". The camera pushes in with small amplitude at slow speed toward the text. A confident male narrator says in an off-screen voiceover: <d>[Chinese] MiniMax H3 开源了。文字、图片、视频、声音，一次全理解，直接生成带原生立体声的视频。</d> [Shot 2] At 00:06.500, the shot cuts to an extreme close-up of the glowing letter edges as the scene slowly fades to black.
@@ -221,7 +229,7 @@ def convert_t2v(task):
         if ct == "MiniMaxH3ImageToVideo":
             node["inputs"]["prompt"] = task["prompt"]
         elif ct == "ResolutionSelector":
-            node["inputs"]["aspect_ratio"] = "9:16 (Portrait Widescreen)"
+            node["inputs"]["aspect_ratio"] = _aspect_ratio_label(task)
             node["inputs"]["megapixels"] = task.get("mp", 0.4)
             node["inputs"]["multiple"] = 32
         elif ct == "PrimitiveFloat":
@@ -257,7 +265,7 @@ def build_i2v(task):
         elif ct == "LoadImage":
             node["inputs"]["image"] = task["image"]
         elif ct == "ResolutionSelector":
-            node["inputs"]["aspect_ratio"] = "9:16 (Portrait Widescreen)"
+            node["inputs"]["aspect_ratio"] = _aspect_ratio_label(task)
             node["inputs"]["megapixels"] = task.get("mp", 0.4)
             node["inputs"]["multiple"] = 32
         elif ct == "PrimitiveFloat":
@@ -371,7 +379,7 @@ def build_r2v(task):
             node["inputs"]["unet_name"] = unet_name
             unet_id = nid
         elif ct == "ResolutionSelector":
-            node["inputs"]["aspect_ratio"] = "9:16 (Portrait Widescreen)"
+            node["inputs"]["aspect_ratio"] = _aspect_ratio_label(task)
             node["inputs"]["megapixels"] = task.get("mp", 0.4)
             node["inputs"]["multiple"] = 32
         elif ct == "PrimitiveFloat":
