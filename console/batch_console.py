@@ -161,6 +161,10 @@ def estimate_timeout(task):
     return int(est * 1.5)  # 再留 50% 余量
 
 
+# 队列和 history 都没有时，超过这个秒数标丢失（不再空等 40 分钟）
+LOST_GRACE_SEC = 180
+
+
 # ---------- HTTP 工具 ----------
 
 def _opener():
@@ -1550,8 +1554,7 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
             "downloaded": False,
             "recorded": False,
             "chain_waiting": is_chain_waiting,
-            "chain_prev": chain_prev_ref
-            or (state["tasks"][-1]["id"] if (chain_mode and idx > 0 and state["tasks"]) else None),
+            "chain_prev": chain_prev_ref,
             "chain_done": False,
             "chain_style": chain_style,
         })
@@ -1560,12 +1563,13 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
     state["chain_style"] = chain_style
     # 新提交视为重新开跑，清掉旧的「已停止」，否则 01 做完后 02 不会接着交
     if any(x.get("ok") for x in results):
-        state["chain_control"] = {
-            "paused": False,
-            "pause_reason": "",
-            "last_cloud_fail_at": 0,
-            "cloud_ok_since": time.time(),
-        }
+        _clear_project_paused(state, str((state.get("project") or {}).get("name") or ""))
+        cc = dict(state.get("chain_control") or {})
+        cc["paused"] = False
+        cc["pause_reason"] = ""
+        cc["last_cloud_fail_at"] = 0
+        cc["cloud_ok_since"] = time.time()
+        state["chain_control"] = cc
     save_state(state)
     if chain_mode and any(x.get("ok") for x in results):
         _ensure_chain_daemon()
@@ -1673,13 +1677,27 @@ def prompt_fingerprint(prompt):
 def get_status(server):
     state = load_state()
     tasks = state.get("tasks", [])
+    proj = state.get("project") or {}
+    proj_name = str(proj.get("name") or "").strip()
+    paused, pause_reason = _current_project_pause(state)
     if not tasks:
-        return {"server_ok": True, "tasks": []}
+        return {
+            "server_ok": True, "tasks": [],
+            "project_name": proj_name,
+            "chain_paused": paused,
+            "chain_pause_reason": pause_reason,
+        }
     try:
         history = api_get(server, "/history?max_items=200")
         queue = api_get(server, "/queue")
     except Exception as e:
-        return {"server_ok": False, "error": str(e), "tasks": tasks}
+        mine = _tasks_for_current_project(state) if proj_name else tasks
+        return {
+            "server_ok": False, "error": str(e), "tasks": mine,
+            "project_name": proj_name,
+            "chain_paused": paused,
+            "chain_pause_reason": pause_reason,
+        }
     running_ids = {t[1] for t in queue.get("queue_running", [])}
     pending_ids = {t[1] for t in queue.get("queue_pending", [])}
     out = []
@@ -1698,13 +1716,16 @@ def get_status(server):
             })
             continue
         if t.get("chain_waiting") and not pid:
+            bridge_fail = bool(t.get("bridge_fail_at"))
             out.append({
                 "id": t["id"], "name": t.get("name", t["id"]), "mode": t.get("mode"),
                 "duration": t.get("duration"), "mp": t.get("mp"), "prompt_id": None,
                 "status": "waiting", "elapsed_sec": None, "outputs": [],
-                "error": None, "downloaded": False,
+                "error": "衔接分镜没画成，约 45 秒后再试（不会用旧分镜）" if bridge_fail else None,
+                "downloaded": False,
                 "submitted_at": t.get("submitted_at", ""),
                 "failure_code": t.get("failure_code"),
+                "bridge_fail": bridge_fail,
             })
             continue
         item = {
@@ -1720,12 +1741,14 @@ def get_status(server):
         elif pid in running_ids:
             item["status"] = "running"
         entry = history.get(pid) if pid else None
+        history_lookup_ok = True
         # 总列表可能截断，按任务号再查一次，避免云端已完成本地还显示生成中
         if pid and not entry:
             try:
                 one = api_get(server, "/history/" + pid, timeout=12)
                 entry = (one or {}).get(pid)
             except Exception:
+                history_lookup_ok = False
                 entry = None
         if entry:
             st = entry.get("status", {})
@@ -1776,13 +1799,23 @@ def get_status(server):
                     "type": of.get("type", "output"),
                 }]
             item["downloaded"] = bool(t.get("downloaded"))
-        # 超时检测：运行/排队超过上限，或既不在队列也不在 history（丢失/被取消）→ 标记失败
+        # 超时/丢失：队列和 history 都没有超过 3 分钟 → F-LOST；跑太久才 F-TIMEOUT
         t0 = t.get("submitted_at")
-        if t0 and item["status"] not in ("completed", "error") and not (t.get("output_file") or t.get("downloaded")):
+        if t0 and pid and item["status"] not in ("completed", "error") and not (t.get("output_file") or t.get("downloaded")):
             try:
                 started = time.mktime(time.strptime(t0, "%Y-%m-%d %H:%M:%S"))
-                if time.time() - started > estimate_timeout(t):
-                    if pid not in pending_ids and pid not in running_ids and not entry:
+                age = time.time() - started
+                in_q = pid in pending_ids or pid in running_ids
+                if (not in_q) and history_lookup_ok and age > LOST_GRACE_SEC:
+                    reason = "lost（远程队列中消失，可能被取消或服务器重启）"
+                    fcode = "F-LOST"
+                    item["status"] = "error"
+                    item["error"] = reason
+                    t["error"] = reason
+                    t["failure_code"] = fcode
+                    changed = True
+                elif age > estimate_timeout(t):
+                    if not in_q and not entry:
                         reason = "lost（远程队列中消失，可能被取消或服务器重启）"
                         fcode = "F-LOST"
                     else:
@@ -1797,9 +1830,12 @@ def get_status(server):
                 pass
         out.append(item)
     # 状态查询只负责对账/下载，不在这里画分镜或交下一段（否则网页刷新会卡住）
-    cc = state.get("chain_control") or {}
     if changed:
         save_state(state)
+    # 第 7 步只显示当前项目，对账仍扫全部任务（别的项目也能下载）
+    if proj_name:
+        mine_ids = {t.get("id") for t in _tasks_for_current_project(state)}
+        out = [x for x in out if x.get("id") in mine_ids]
     # 排序：进行中的任务置顶（running > queued > waiting > paused > completed > error）
     def _status_rank(s):
         return {"running": 0, "queued": 1, "waiting": 2, "paused": 3, "completed": 4, "error": 5}.get(s, 6)
@@ -1808,8 +1844,9 @@ def get_status(server):
     return {
         "server_ok": True,
         "tasks": out,
-        "chain_paused": bool(cc.get("paused")),
-        "chain_pause_reason": cc.get("pause_reason") or "",
+        "project_name": proj_name,
+        "chain_paused": paused,
+        "chain_pause_reason": pause_reason,
     }
 
 
@@ -1828,7 +1865,7 @@ def _acquire_chain_lock():
     except FileExistsError:
         try:
             age = time.time() - os.path.getmtime(p)
-            if age > 180:
+            if age > 600:
                 os.remove(p)
                 return _acquire_chain_lock()
         except Exception:
@@ -1848,7 +1885,8 @@ def _release_chain_lock():
 def advance_chain(server, state):
     """链式衔接：上一段完成并下载后，抽最后一帧上传，提交下一段。"""
     cc = state.get("chain_control") or {}
-    if cc.get("paused"):
+    # 仅旧版「全局暂停」才整链停；新版按项目暂停，由内层跳过
+    if cc.get("paused") and not _project_pause_map(state):
         return False
     if not _acquire_chain_lock():
         return False
@@ -1864,6 +1902,8 @@ def _advance_chain_inner(server, state):
     by_id = {t.get("id"): t for t in tasks}
     for i, nxt in enumerate(tasks):
         if nxt.get("paused_by_user"):
+            continue
+        if _task_project_is_paused(state, nxt):
             continue
         if not nxt.get("chain_waiting") or nxt.get("prompt_id") or nxt.get("output_file") or nxt.get("downloaded"):
             continue
@@ -1896,7 +1936,9 @@ def _advance_chain_inner(server, state):
         # 按 chain_prev 找上一段。重生成第 N 段时，即使上一段已经接过旧版，仍用紧邻上一段末帧。
         t = by_id.get(nxt.get("chain_prev")) if nxt.get("chain_prev") else None
         if t is None and i > 0:
-            t = tasks[i - 1]
+            cand = tasks[i - 1]
+            if _task_title_key(cand.get("name")) == _task_title_key(nxt.get("name")):
+                t = cand
         if t is not None and t.get("chain_done"):
             nxt_seg = _task_seg_num(nxt.get("name"))
             prev_seg = _task_seg_num(t.get("name"))
@@ -2251,33 +2293,149 @@ def _project_task_prefixes(proj):
     return prefixes
 
 
+def _submitted_name_hit(task_name, submitted):
+    """已提交名单能对上（含后来自动加的 _v2）。"""
+    name = str(task_name or "")
+    for s in submitted:
+        s = str(s or "")
+        if not s:
+            continue
+        if name == s or name.startswith(s + "_v"):
+            return True
+    return False
+
+
+def _task_matches_project(task, proj):
+    """任务是否属于这个项目。"""
+    if not proj:
+        return False
+    name = str(task.get("name") or "")
+    submitted = [x for x in (proj.get("submitted_task_names") or []) if x]
+    for rec in (proj.get("generation_log") or []):
+        for s in rec.get("shots") or []:
+            if s.get("name"):
+                submitted.append(s["name"])
+    if submitted and _submitted_name_hit(name, submitted):
+        return True
+    prefixes = _project_task_prefixes(proj)
+    if prefixes and any(name.startswith(p) for p in prefixes):
+        return True
+    return False
+
+
+def _tasks_for_project(state, proj):
+    tasks = state.get("tasks") or []
+    if not proj:
+        return list(tasks)
+    hit = [t for t in tasks if _task_matches_project(t, proj)]
+    if hit:
+        return hit
+    # 已有项目名但对不上：不要把别的项目任务拿来
+    if str(proj.get("name") or "").strip():
+        return []
+    return list(tasks)
+
+
 def _tasks_for_current_project(state):
     """只拿当前项目的任务，避免断点续接误用别的项目的高版本批次。"""
-    tasks = state.get("tasks") or []
+    return _tasks_for_project(state, state.get("project") or {})
+
+
+def _project_pause_map(state):
+    """各项目是否已点停止：{项目名: 原因}。"""
+    cc = state.get("chain_control") or {}
+    raw = cc.get("paused_projects") or {}
+    out = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if not k:
+                continue
+            if isinstance(v, str):
+                out[str(k)] = v
+            elif isinstance(v, dict):
+                out[str(k)] = v.get("reason") or "已停止"
+            elif v:
+                out[str(k)] = "已停止"
+    return out
+
+
+def _set_project_paused(state, proj_name, reason):
+    """只暂停这一个项目，不设全局 paused。"""
+    cc = dict(state.get("chain_control") or {})
+    paused = dict(cc.get("paused_projects") or {})
+    name = str(proj_name or "").strip()
+    if name:
+        paused[name] = reason or "用户点击停止"
+    cc["paused_projects"] = paused
+    cc["paused"] = False
+    cc["pause_reason"] = reason or ""
+    state["chain_control"] = cc
+
+
+def _clear_project_paused(state, proj_name):
+    """清掉当前项目的停止标记。"""
+    cc = dict(state.get("chain_control") or {})
+    paused = dict(cc.get("paused_projects") or {})
+    name = str(proj_name or "").strip()
+    if name:
+        paused.pop(name, None)
+    cc["paused_projects"] = paused
+    cc["paused"] = False
+    cc["pause_reason"] = ""
+    state["chain_control"] = cc
+
+
+def _task_project_is_paused(state, task):
+    """这段是否属于一个已点停止的项目。"""
+    cc = state.get("chain_control") or {}
+    paused_map = _project_pause_map(state)
+    if cc.get("paused") and not paused_map:
+        return True
+    if not paused_map:
+        return False
+    projects = dict(state.get("projects") or {})
+    cur = state.get("project") or {}
+    if cur.get("name"):
+        projects[cur["name"]] = cur
+    name = str(task.get("name") or "")
+    for pname in paused_map:
+        proj = projects.get(pname) or {"name": pname}
+        if _task_matches_project(task, proj):
+            return True
+        if name.startswith(str(pname) + "_"):
+            return True
+    return False
+
+
+def _current_project_pause(state):
+    """当前打开的项目是否已停止。返回 (是否暂停, 原因)。"""
     proj = state.get("project") or {}
-    submitted = set(proj.get("submitted_task_names") or [])
-    if submitted:
-        hit = [t for t in tasks if t.get("name") in submitted]
-        if hit:
-            return hit
-    prefixes = _project_task_prefixes(proj)
-    if prefixes:
-        hit = [
-            t for t in tasks
-            if any(str(t.get("name") or "").startswith(p) for p in prefixes)
-        ]
-        if hit:
-            return hit
-    return tasks
+    name = str(proj.get("name") or "").strip()
+    cc = state.get("chain_control") or {}
+    paused_map = _project_pause_map(state)
+    if name and name in paused_map:
+        return True, paused_map[name] or "用户点击停止"
+    if cc.get("paused") and not paused_map:
+        return True, cc.get("pause_reason") or "生成已暂停"
+    return False, ""
 
 
 def stop_generation(server=None):
-    """停止：打断云端 + 清空队列 + 停链式守护；已完成保留，未完成标记可续接。"""
+    """停止当前项目：只暂停本项目未完成段；其他项目继续跑。"""
     server = (server or "").strip() or DEFAULT_SERVER
-    cloud = {"interrupt": None, "clear": None}
+    cloud = {"interrupt": None, "delete": []}
+    state = load_state()
+    proj = state.get("project") or {}
+    proj_name = str(proj.get("name") or "").strip()
+    mine = _tasks_for_current_project(state)
+    mine_ids = {t.get("id") for t in mine}
+    ours_pids = {
+        t.get("prompt_id") for t in mine
+        if t.get("prompt_id") and not _task_done(t)
+    }
 
     def _post_empty_ok(path, payload=None):
-        """ComfyUI /interrupt、/queue clear 常返回空 body，不能按 JSON 解析。"""
+        """ComfyUI /interrupt、/queue 常返回空 body，不能按 JSON 解析。"""
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             server + path, data=data or b"{}", method="POST",
@@ -2290,32 +2448,70 @@ def stop_generation(server=None):
         except Exception as e:
             return str(e)
 
-    cloud["interrupt"] = _post_empty_ok("/interrupt", {})
-    cloud["clear"] = _post_empty_ok("/queue", {"clear": True})
-    _kill_named_process("chain_daemon")
-    state = load_state()
+    running_pid = None
+    try:
+        q = api_get(server, "/queue", timeout=8)
+        running = q.get("queue_running") or []
+        if running:
+            running_pid = running[0][1]
+    except Exception as e:
+        cloud["queue_err"] = str(e)
+
+    # 只打断本项目正在跑的那段，不清整队（避免误停别的项目）
+    if running_pid and running_pid in ours_pids:
+        cloud["interrupt"] = _post_empty_ok("/interrupt", {})
+    else:
+        cloud["interrupt"] = "skip"
+    for pid in ours_pids:
+        if pid:
+            cloud["delete"].append(pid)
+            _post_empty_ok("/queue", {"delete": [pid]})
+
+    others_need_daemon = False
+    for t in state.get("tasks") or []:
+        if t.get("id") in mine_ids or t.get("paused_by_user"):
+            continue
+        waiting = bool(t.get("chain_waiting") and not t.get("prompt_id"))
+        running = bool(t.get("prompt_id") and not _task_done(t) and not t.get("error"))
+        if waiting or running:
+            others_need_daemon = True
+            break
+    if not others_need_daemon:
+        _kill_named_process("chain_daemon")
+
     paused_names = []
     for t in state.get("tasks", []):
+        if t.get("id") not in mine_ids:
+            continue
         if _task_done(t):
             continue
         for k in ("prompt_id", "submitted_at", "error", "failure_code"):
             t.pop(k, None)
         t["chain_waiting"] = False
         t["paused_by_user"] = True
+        t.pop("bridge_fail_at", None)
         paused_names.append(t.get("name"))
-    state["chain_control"] = {
-        "paused": True,
-        "pause_reason": "用户点击停止",
-        "last_cloud_fail_at": time.time(),
-        "cloud_ok_since": 0,
-    }
+    if proj_name:
+        _set_project_paused(state, proj_name, "用户点击停止")
+    else:
+        state["chain_control"] = {
+            "paused": True,
+            "pause_reason": "用户点击停止",
+            "last_cloud_fail_at": time.time(),
+            "cloud_ok_since": 0,
+            "paused_projects": {},
+        }
     save_state(state)
+    extra = "其他项目仍在继续。" if others_need_daemon else ""
     return {
         "ok": True,
         "cloud": cloud,
         "paused_count": len(paused_names),
         "paused_names": paused_names,
-        "message": f"已停止。未完成 {len(paused_names)} 段已暂停，已完成视频保留。可点「从断点继续」。",
+        "message": (
+            f"已停止当前项目。未完成 {len(paused_names)} 段已暂停，已完成视频保留。"
+            f"{extra}可点「从断点继续」。"
+        ),
     }
 
 
@@ -2392,12 +2588,13 @@ def resume_from_breakpoint(server=None):
             if not t.get("chain_style"):
                 t["chain_style"] = state.get("chain_style") or "frame_story"
 
-    state["chain_control"] = {
-        "paused": False,
-        "pause_reason": "",
-        "last_cloud_fail_at": 0,
-        "cloud_ok_since": time.time(),
-    }
+    _clear_project_paused(state, str((state.get("project") or {}).get("name") or ""))
+    cc = dict(state.get("chain_control") or {})
+    cc["paused"] = False
+    cc["pause_reason"] = ""
+    cc["last_cloud_fail_at"] = 0
+    cc["cloud_ok_since"] = time.time()
+    state["chain_control"] = cc
     changed = advance_chain(server, state)
     save_state(state)
     daemon_pid = _ensure_chain_daemon()

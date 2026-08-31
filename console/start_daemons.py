@@ -10,20 +10,46 @@ macOS/Linux 通过 setsid 独立成会话；Windows 通过 CREATE_NEW_PROCESS_GR
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import platform
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 PY = sys.executable
-FFMPEG_BIN = r"E:\AIDATA\tools\ffmpeg\ffmpeg-9.0.1-essentials_build\bin"
+
+
+def _ffmpeg_dirs():
+    """找出 ffmpeg 所在目录：环境变量 → PATH → 本机旧路径（仅当还在）。"""
+    dirs = []
+    hint = (os.environ.get("FFMPEG_BIN") or os.environ.get("FFMPEG_PATH") or "").strip()
+    if hint:
+        if os.path.isfile(hint):
+            dirs.append(os.path.dirname(os.path.abspath(hint)))
+        elif os.path.isdir(hint):
+            dirs.append(os.path.abspath(hint))
+    which = shutil.which("ffmpeg")
+    if which:
+        dirs.append(os.path.dirname(os.path.abspath(which)))
+    # 本机以前装过的路径，只在目录还在时当兜底，不写死依赖
+    legacy = r"E:\AIDATA\tools\ffmpeg\ffmpeg-9.0.1-essentials_build\bin"
+    if os.path.isdir(legacy):
+        dirs.append(legacy)
+    seen = set()
+    out = []
+    for d in dirs:
+        if d and d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
 
 
 def _child_env():
-    """子进程环境：确保 ffmpeg 在 PATH 中（Windows 链式抽帧依赖）。"""
+    """子进程环境：把能找到的 ffmpeg 目录补进 PATH（链式抽帧依赖）。"""
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
-    if os.path.isdir(FFMPEG_BIN):
-        env["PATH"] = FFMPEG_BIN + os.pathsep + env.get("PATH", "")
+    extra = _ffmpeg_dirs()
+    if extra:
+        env["PATH"] = os.pathsep.join(extra) + os.pathsep + env.get("PATH", "")
     return env
 
 

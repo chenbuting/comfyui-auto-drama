@@ -33,10 +33,9 @@ def main():
                 print(f"[daemon] 服务器异常：{result.get('error')}", flush=True)
             else:
                 st = bc.load_state()
-                cc = st.get("chain_control") or {}
-                if not cc.get("paused"):
-                    if bc.advance_chain(server, st):
-                        bc.save_state(st)
+                # 按项目暂停：某个项目停了仍推进其他项目
+                if bc.advance_chain(server, st):
+                    bc.save_state(st)
                 active = [t for t in result["tasks"] if t["status"] in ("queued", "running", "waiting")]
                 done = [t for t in result["tasks"] if t["status"] == "completed"]
                 brief = ", ".join(

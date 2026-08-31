@@ -398,7 +398,7 @@
   <section class="panel" id="panel-7">
     <div class="card">
       <h2>提交生成 <span class="step-tag">第 7 步</span></h2>
-      <div class="desc">勾选链式衔接则上段末帧自动接下一段首帧；可用停止/从断点继续，不会覆盖已完成视频。</div>
+      <div class="desc">勾选链式衔接则上段末帧自动接下一段首帧；停止/从断点继续只作用于当前项目，不会覆盖已完成视频。</div>
       <div class="row">
         <label style="font-size:13px"><input type="checkbox" id="chainMode"> 🔗 链式衔接（上段末帧 → 下段首帧）</label>
         <label id="chainStyleWrap" style="font-size:13px;display:none">衔接方式
@@ -1480,13 +1480,24 @@ async function refreshStatus() {
     const r = await fetch(`/api/status?server=${encodeURIComponent(server)}`);
     const d = await r.json();
     if (!d.server_ok) { statusCardsFp = ''; $('statusCards').innerHTML = '<div class="empty">⚠️ 服务器连接异常</div>'; return; }
-    if (!d.tasks.length) { statusCardsFp = ''; $('statusCards').innerHTML = '<div class="empty"><div class="big">🎬</div>还没有任务，提交后这里显示状态</div>'; return; }
+    const pname = d.project_name || ($('projectName') && $('projectName').value.trim()) || '';
+    if (!d.tasks.length) {
+      statusCardsFp = '';
+      const who = pname ? `当前项目「${esc(pname)}」` : '当前项目';
+      $('statusCards').innerHTML = `<div class="empty"><div class="big">🎬</div>${who}还没有任务，提交后这里显示状态</div>`;
+      if ($('chainPauseHint')) { $('chainPauseHint').style.display = 'none'; }
+      return;
+    }
     statusTasksCache = d.tasks;
     const hint = $('chainPauseHint');
     if (hint) {
+      const bridge = (d.tasks || []).find(t => t.bridge_fail || (t.status === 'waiting' && t.error && String(t.error).includes('衔接分镜')));
       if (d.chain_paused) {
         hint.style.display = '';
-        hint.textContent = '⏹ 已停止：' + (d.chain_pause_reason || '生成已暂停') + '。点「从断点继续」可接着跑，不会覆盖已完成段。';
+        hint.textContent = '⏹ 已停止当前项目：' + (d.chain_pause_reason || '生成已暂停') + '。点「从断点继续」可接着跑，不会覆盖已完成段。其他项目不受影响。';
+      } else if (bridge) {
+        hint.style.display = '';
+        hint.textContent = '⚠️ ' + (bridge.name || '') + '：衔接分镜没画成，约 45 秒后再试（不会用旧分镜）。';
       } else {
         hint.style.display = 'none';
         hint.textContent = '';
@@ -1505,7 +1516,7 @@ function renderStatusCards() {
   const show = tasks.slice(statusPage * statusPageSize, (statusPage + 1) * statusPageSize);
   const fp = JSON.stringify(show.map(t => ({
     id: t.id, status: t.status, downloaded: t.downloaded, error: t.error,
-    outputs: t.outputs, fc: t.failure_code, name: t.name,
+    outputs: t.outputs, fc: t.failure_code, name: t.name, bf: t.bridge_fail,
   })));
   // 状态没变就只改耗时，避免 8 秒刷新把已有预览拆掉变成黑屏
   if (fp === statusCardsFp && $('statusCards').querySelector('[data-task-id]')) {
@@ -1932,7 +1943,7 @@ async function clearHistory() {
 }
 
 async function stopGeneration() {
-  if (!confirm('确定停止当前生成？\n\n会打断云端任务并停止自动续接。\n已完成的视频会保留，之后可「从断点继续」。')) return;
+  if (!confirm('确定停止当前项目的生成？\n\n只停这个项目，其他项目不受影响。\n已完成的视频会保留，之后可「从断点继续」。')) return;
   const btn = $('btnStopGen');
   btn.disabled = true;
   try {
@@ -1949,7 +1960,7 @@ async function stopGeneration() {
 }
 
 async function resumeChain() {
-  if (!confirm('从断点继续？\n\n会从最新批次「最后一个已完成段」往后接着跑，\n不会覆盖已经生成好的视频。')) return;
+  if (!confirm('从断点继续当前项目？\n\n会从本项目最新批次「最后一个已完成段」往后接着跑，\n不会覆盖已经生成好的视频。')) return;
   const btn = $('btnResumeChain');
   btn.disabled = true;
   try {
