@@ -2638,12 +2638,13 @@ async function genSceneImg(i) {
   finally { btn.disabled = false; btn.textContent = '🖼️ 生成'; }
 }
 
-async function buildStoryPrompt(i) {
-  // 第 2 段起强制带上一段结尾；重新生成也会重写提示词（旧海报提示不能留）
+async function buildStoryPrompt(i, opts) {
+  // 重新生成：卡片里已有提示词就沿用，只重画图，不改词
+  const forceNew = !!(opts && opts.forceNew);
   let prompt = defaultStoryPrompt(i);
   const ta = document.querySelector(`.asset-prompt[data-kind="story"][data-key="${i}"]`);
-  const keepOld = i === 0 && ta && ta.value.trim() && !$('storyAiPrompt').checked;
-  if (keepOld) return ta.value.trim();
+  const existing = ta && ta.value.trim();
+  if (existing && !forceNew) return existing;
   if ($('storyAiPrompt') && $('storyAiPrompt').checked) {
     try {
       const sb = (currentScript.storyboard_list || [])[i] || {};
@@ -2710,7 +2711,9 @@ function clearStoryImg(i) {
 }
 
 async function genStoryImg(i) {
-  toastLoading(`🤖 正在生成分镜 ${i + 1} 提示词…`);
+  const ta = document.querySelector(`.asset-prompt[data-kind="story"][data-key="${i}"]`);
+  const hasPrompt = !!(ta && ta.value.trim());
+  if (!hasPrompt) toastLoading(`🤖 正在生成分镜 ${i + 1} 提示词…`);
   let prompt = await buildStoryPrompt(i);
   assetPrompts.story[i] = prompt;
   const btn = event.target; btn.disabled = true; btn.textContent = '生成中…';
@@ -2722,7 +2725,10 @@ async function genStoryImg(i) {
     autoSaveProject(true);
     toast(`✅ 分镜 ${i + 1} 图已生成`);
   } catch (e) { toast(e.message, true); }
-  finally { btn.disabled = false; btn.textContent = '🎬 生成分镜图'; }
+  finally {
+    btn.disabled = false;
+    btn.textContent = assetImgs.story[i] ? '🔄 重新生成' : '🎬 生成分镜图';
+  }
 }
 
 function setRoleGender(i, g) {

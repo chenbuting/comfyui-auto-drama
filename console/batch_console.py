@@ -1283,7 +1283,7 @@ def describe_last_frame(image_path):
 def regen_bridge_storyboard(last_frame_png, nxt, state=None):
     """用上一段真实末帧重生下一张分镜：开头像末帧，后半才是本段戏。
 
-    生图失败返回 None，链式仍用原来的分镜图。
+    生图失败返回 None，调用方应暂缓交视频，不要沿用旧分镜。
     """
     if not last_frame_png or not os.path.isfile(last_frame_png):
         return None
@@ -1309,11 +1309,21 @@ def regen_bridge_storyboard(last_frame_png, nxt, state=None):
         "无文字、无水印、无字幕。"
     )
     fn = f"分镜_s{seg_n or 'x'}_bridge_{uuid.uuid4().hex[:8]}.png"
-    try:
-        saved, dest = boogu_generate(prompt, fn, "768x1024", timeout=120, ref_images=ref_paths)
-        print(f"[chain] 已按末帧+角色锚点重生衔接分镜：{saved} refs={len(ref_paths)}")
-    except Exception as e:
-        print(f"[chain] 重生衔接分镜失败（沿用旧分镜）：{e}")
+    last_err = None
+    saved = None
+    for attempt in range(3):
+        try:
+            saved, dest = boogu_generate(prompt, fn, "768x1024", timeout=120, ref_images=ref_paths)
+            print(f"[chain] 已按末帧+角色锚点重生衔接分镜：{saved} refs={len(ref_paths)}")
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            print(f"[chain] 重生衔接分镜第 {attempt + 1} 次失败：{e}")
+            if attempt < 2:
+                time.sleep(2)
+    if last_err or not saved:
+        print(f"[chain] 衔接分镜没画成，本段先不交视频：{last_err}")
         return None
     try:
         st = state if isinstance(state, dict) else load_state()
@@ -1866,6 +1876,18 @@ def _advance_chain_inner(server, state):
         if already:
             nxt["chain_waiting"] = False
             continue
+        # 同一片子还有一段在跑/排队，先等它做完，禁止 02 还没完就交 04
+        busy = any(
+            x is not nxt
+            and _task_title_key(x.get("name")) == nxt_key
+            and x.get("prompt_id")
+            and not x.get("output_file")
+            and not x.get("downloaded")
+            and not x.get("error")
+            for x in tasks
+        )
+        if busy:
+            continue
         # 按 chain_prev 找上一段。重生成第 N 段时，即使上一段已经接过旧版，仍用紧邻上一段末帧。
         t = by_id.get(nxt.get("chain_prev")) if nxt.get("chain_prev") else None
         if t is None and i > 0:
@@ -2029,9 +2051,16 @@ def _advance_chain_inner(server, state):
                 story = story or ""
         # 用上一段真实末帧 + 角色锚点重生本段分镜（开头接末帧，人跟锚点一致）
         if use_story:
+            last_fail = float(nxt.get("bridge_fail_at") or 0)
+            if last_fail and time.time() - last_fail < 45:
+                return changed
             bridged = regen_bridge_storyboard(png, nxt, state)
-            if bridged:
-                story = bridged
+            if not bridged:
+                nxt["bridge_fail_at"] = time.time()
+                print(f"[chain] {nxt.get('name')} 衔接分镜没画成，先不交视频，约 45 秒后再试")
+                return True
+            story = bridged
+            nxt.pop("bridge_fail_at", None)
         # 第2段起视频不带角色正脸：人已画进分镜，再塞大头照会抢末帧
         _, scene_fn = _seg_identity_refs(state, nxt)
         chain_extra = [scene_fn] if scene_fn else []
@@ -2324,7 +2353,8 @@ def resume_from_breakpoint(server=None):
                 t.pop(k, None)
             t["chain_waiting"] = True
             t["paused_by_user"] = False
-            t["chain_prev"] = batch[i - 1].get("id")
+            # 每段只挂紧邻上一段，避免 03/04 都挂到已完成段然后同时开跑
+            t["chain_prev"] = batch[i - 1].get("id") if i > 0 else batch[last_done_i].get("id")
             if not t.get("chain_style"):
                 t["chain_style"] = state.get("chain_style") or "frame_story"
 
