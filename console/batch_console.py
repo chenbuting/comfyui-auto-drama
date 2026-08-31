@@ -1719,7 +1719,14 @@ def get_status(server):
             item["status"] = "queued"
         elif pid in running_ids:
             item["status"] = "running"
-        entry = history.get(pid)
+        entry = history.get(pid) if pid else None
+        # 总列表可能截断，按任务号再查一次，避免云端已完成本地还显示生成中
+        if pid and not entry:
+            try:
+                one = api_get(server, "/history/" + pid, timeout=12)
+                entry = (one or {}).get(pid)
+            except Exception:
+                entry = None
         if entry:
             st = entry.get("status", {})
             msgs = {m[0]: m[1] for m in st.get("messages", [])}
@@ -1789,12 +1796,14 @@ def get_status(server):
             except Exception:
                 pass
         out.append(item)
-    # 用户手动停止后，禁止自动链式推进
+    # 先落盘已完成/已下载，再推进下一段，避免生图卡住时完成状态丢了
     cc = state.get("chain_control") or {}
-    if not cc.get("paused"):
-        changed = advance_chain(server, state) or changed
     if changed:
         save_state(state)
+        changed = False
+    if not cc.get("paused"):
+        if advance_chain(server, state):
+            save_state(state)
     # 排序：进行中的任务置顶（running > queued > waiting > paused > completed > error）
     def _status_rank(s):
         return {"running": 0, "queued": 1, "waiting": 2, "paused": 3, "completed": 4, "error": 5}.get(s, 6)
@@ -2314,6 +2323,27 @@ def stop_generation(server=None):
     }
 
 
+def _cloud_prompt_exists(server, pid):
+    """云端队列或 history 里还有这个任务号（在跑/已完成/失败都算还在）。"""
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    try:
+        q = api_get(server, "/queue", timeout=8)
+        active = {x[1] for x in (q.get("queue_running") or [])} | {x[1] for x in (q.get("queue_pending") or [])}
+        if pid in active:
+            return True
+    except Exception:
+        return True
+    try:
+        h = api_get(server, "/history/" + pid, timeout=8)
+        if h and h.get(pid):
+            return True
+    except Exception:
+        return True
+    return False
+
+
 def resume_from_breakpoint(server=None):
     """从断点继续：不覆盖已完成段，只从最新批次最后一个完成段往后续接。"""
     server = (server or "").strip() or DEFAULT_SERVER
@@ -2349,10 +2379,18 @@ def resume_from_breakpoint(server=None):
             t["chain_done"] = False
             t.pop("paused_by_user", None)
         else:
+            pid = t.get("prompt_id")
+            # 已经交到云端且任务还在（在跑或已出片）：不要清任务号，否则本地对不上已完成视频
+            if pid and not t.get("error") and _cloud_prompt_exists(server, pid):
+                t.pop("paused_by_user", None)
+                t["chain_waiting"] = False
+                t.pop("bridge_fail_at", None)
+                continue
             for k in ("prompt_id", "submitted_at", "error", "failure_code", "output_file", "downloaded", "recorded"):
                 t.pop(k, None)
             t["chain_waiting"] = True
             t["paused_by_user"] = False
+            t.pop("bridge_fail_at", None)
             # 每段只挂紧邻上一段，避免 03/04 都挂到已完成段然后同时开跑
             t["chain_prev"] = batch[i - 1].get("id") if i > 0 else batch[last_done_i].get("id")
             if not t.get("chain_style"):
