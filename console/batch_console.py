@@ -161,6 +161,10 @@ def estimate_timeout(task):
     return int(est * 1.5)  # 再留 50% 余量
 
 
+# 队列和 history 都没有时，超过这个秒数标丢失（不再空等 40 分钟）
+LOST_GRACE_SEC = 180
+
+
 # ---------- HTTP 工具 ----------
 
 def _opener():
@@ -553,6 +557,27 @@ def start_assemble_job(project_name="", selection=None, seg_range=None):
 
 # ---------- 图构建与提交 ----------
 
+def _project_aspect(state=None, task=None):
+    """当前项目或任务上的画幅文案。"""
+    if task and task.get("aspect"):
+        return str(task.get("aspect"))
+    st = state if isinstance(state, dict) else None
+    if st is None:
+        try:
+            st = load_state()
+        except Exception:
+            st = {}
+    return str(((st or {}).get("project") or {}).get("aspect") or "竖版 1080×1920")
+
+
+def _frame_hint(state=None, task=None, aspect=None):
+    """分镜/生图用的构图提示。"""
+    a = aspect or _project_aspect(state, task)
+    if any(k in str(a) for k in ("横", "16:9", "1920")):
+        return "横构图 16:9"
+    return "竖构图 9:16"
+
+
 def build_graphs(tasks):
     if not os.path.isdir(DEFAULT_WORKFLOW_DIR):
         return None, f"找不到工作流目录：{DEFAULT_WORKFLOW_DIR}"
@@ -561,6 +586,7 @@ def build_graphs(tasks):
         import build_api_graphs as bg
     except Exception as e:
         return None, f"无法加载 build_api_graphs.py：{e}"
+    proj_aspect = _project_aspect()
     out = []
     for i, t in enumerate(tasks):
         try:
@@ -569,6 +595,7 @@ def build_graphs(tasks):
             task.setdefault("seed", random.randrange(10 ** 15))
             task.setdefault("mp", 1.0)
             task.setdefault("duration", 10)
+            task.setdefault("aspect", proj_aspect)
             if task.get("chain_waiting"):
                 g = None
             elif task["mode"] == "t2v":
@@ -1283,7 +1310,7 @@ def describe_last_frame(image_path):
 def regen_bridge_storyboard(last_frame_png, nxt, state=None):
     """用上一段真实末帧重生下一张分镜：开头像末帧，后半才是本段戏。
 
-    生图失败返回 None，链式仍用原来的分镜图。
+    生图失败返回 None，调用方应暂缓交视频，不要沿用旧分镜。
     """
     if not last_frame_png or not os.path.isfile(last_frame_png):
         return None
@@ -1298,7 +1325,7 @@ def regen_bridge_storyboard(last_frame_png, nxt, state=None):
     identity, _ = _seg_identity_refs(st, nxt)
     ref_paths = _resolve_ref_paths([last_frame_png] + identity, limit=6)
     prompt = (
-        "电影感分镜图，竖构图 3:4，写实。"
+        f"电影感分镜图，{_frame_hint(st)}，写实。"
         "必须是一张完整的单一电影画面，只拍本段进行中的一个瞬间。"
         "禁止四格、连环画、漫画分格、拼图、同一张图里多个小画面或分栏。"
         "人物外貌必须与提供的角色参考图完全同一人（五官、发型、服装），"
@@ -1309,11 +1336,21 @@ def regen_bridge_storyboard(last_frame_png, nxt, state=None):
         "无文字、无水印、无字幕。"
     )
     fn = f"分镜_s{seg_n or 'x'}_bridge_{uuid.uuid4().hex[:8]}.png"
-    try:
-        saved, dest = boogu_generate(prompt, fn, "768x1024", timeout=120, ref_images=ref_paths)
-        print(f"[chain] 已按末帧+角色锚点重生衔接分镜：{saved} refs={len(ref_paths)}")
-    except Exception as e:
-        print(f"[chain] 重生衔接分镜失败（沿用旧分镜）：{e}")
+    last_err = None
+    saved = None
+    for attempt in range(3):
+        try:
+            saved, dest = boogu_generate(prompt, fn, "768x1024", timeout=120, ref_images=ref_paths)
+            print(f"[chain] 已按末帧+角色锚点重生衔接分镜：{saved} refs={len(ref_paths)}")
+            last_err = None
+            break
+        except Exception as e:
+            last_err = e
+            print(f"[chain] 重生衔接分镜第 {attempt + 1} 次失败：{e}")
+            if attempt < 2:
+                time.sleep(2)
+    if last_err or not saved:
+        print(f"[chain] 衔接分镜没画成，本段先不交视频：{last_err}")
         return None
     try:
         st = state if isinstance(state, dict) else load_state()
@@ -1540,22 +1577,23 @@ def submit_tasks(server, tasks, auto_download=True, chain_mode=False, role_image
             "downloaded": False,
             "recorded": False,
             "chain_waiting": is_chain_waiting,
-            "chain_prev": chain_prev_ref
-            or (state["tasks"][-1]["id"] if (chain_mode and idx > 0 and state["tasks"]) else None),
+            "chain_prev": chain_prev_ref,
             "chain_done": False,
             "chain_style": chain_style,
+            "aspect": task.get("aspect") or str((state.get("project") or {}).get("aspect") or ""),
         })
         results.append({"id": base_tid, "ok": True, "task_id": tid, "prompt_id": pid, "waiting": is_chain_waiting})
         prev_new_tid = tid
     state["chain_style"] = chain_style
     # 新提交视为重新开跑，清掉旧的「已停止」，否则 01 做完后 02 不会接着交
     if any(x.get("ok") for x in results):
-        state["chain_control"] = {
-            "paused": False,
-            "pause_reason": "",
-            "last_cloud_fail_at": 0,
-            "cloud_ok_since": time.time(),
-        }
+        _clear_project_paused(state, str((state.get("project") or {}).get("name") or ""))
+        cc = dict(state.get("chain_control") or {})
+        cc["paused"] = False
+        cc["pause_reason"] = ""
+        cc["last_cloud_fail_at"] = 0
+        cc["cloud_ok_since"] = time.time()
+        state["chain_control"] = cc
     save_state(state)
     if chain_mode and any(x.get("ok") for x in results):
         _ensure_chain_daemon()
@@ -1663,13 +1701,27 @@ def prompt_fingerprint(prompt):
 def get_status(server):
     state = load_state()
     tasks = state.get("tasks", [])
+    proj = state.get("project") or {}
+    proj_name = str(proj.get("name") or "").strip()
+    paused, pause_reason = _current_project_pause(state)
     if not tasks:
-        return {"server_ok": True, "tasks": []}
+        return {
+            "server_ok": True, "tasks": [],
+            "project_name": proj_name,
+            "chain_paused": paused,
+            "chain_pause_reason": pause_reason,
+        }
     try:
         history = api_get(server, "/history?max_items=200")
         queue = api_get(server, "/queue")
     except Exception as e:
-        return {"server_ok": False, "error": str(e), "tasks": tasks}
+        mine = _tasks_for_current_project(state) if proj_name else tasks
+        return {
+            "server_ok": False, "error": str(e), "tasks": mine,
+            "project_name": proj_name,
+            "chain_paused": paused,
+            "chain_pause_reason": pause_reason,
+        }
     running_ids = {t[1] for t in queue.get("queue_running", [])}
     pending_ids = {t[1] for t in queue.get("queue_pending", [])}
     out = []
@@ -1688,13 +1740,16 @@ def get_status(server):
             })
             continue
         if t.get("chain_waiting") and not pid:
+            bridge_fail = bool(t.get("bridge_fail_at"))
             out.append({
                 "id": t["id"], "name": t.get("name", t["id"]), "mode": t.get("mode"),
                 "duration": t.get("duration"), "mp": t.get("mp"), "prompt_id": None,
                 "status": "waiting", "elapsed_sec": None, "outputs": [],
-                "error": None, "downloaded": False,
+                "error": "衔接分镜没画成，约 45 秒后再试（不会用旧分镜）" if bridge_fail else None,
+                "downloaded": False,
                 "submitted_at": t.get("submitted_at", ""),
                 "failure_code": t.get("failure_code"),
+                "bridge_fail": bridge_fail,
             })
             continue
         item = {
@@ -1709,7 +1764,16 @@ def get_status(server):
             item["status"] = "queued"
         elif pid in running_ids:
             item["status"] = "running"
-        entry = history.get(pid)
+        entry = history.get(pid) if pid else None
+        history_lookup_ok = True
+        # 总列表可能截断，按任务号再查一次，避免云端已完成本地还显示生成中
+        if pid and not entry:
+            try:
+                one = api_get(server, "/history/" + pid, timeout=12)
+                entry = (one or {}).get(pid)
+            except Exception:
+                history_lookup_ok = False
+                entry = None
         if entry:
             st = entry.get("status", {})
             msgs = {m[0]: m[1] for m in st.get("messages", [])}
@@ -1759,13 +1823,23 @@ def get_status(server):
                     "type": of.get("type", "output"),
                 }]
             item["downloaded"] = bool(t.get("downloaded"))
-        # 超时检测：运行/排队超过上限，或既不在队列也不在 history（丢失/被取消）→ 标记失败
+        # 超时/丢失：队列和 history 都没有超过 3 分钟 → F-LOST；跑太久才 F-TIMEOUT
         t0 = t.get("submitted_at")
-        if t0 and item["status"] not in ("completed", "error") and not (t.get("output_file") or t.get("downloaded")):
+        if t0 and pid and item["status"] not in ("completed", "error") and not (t.get("output_file") or t.get("downloaded")):
             try:
                 started = time.mktime(time.strptime(t0, "%Y-%m-%d %H:%M:%S"))
-                if time.time() - started > estimate_timeout(t):
-                    if pid not in pending_ids and pid not in running_ids and not entry:
+                age = time.time() - started
+                in_q = pid in pending_ids or pid in running_ids
+                if (not in_q) and history_lookup_ok and age > LOST_GRACE_SEC:
+                    reason = "lost（远程队列中消失，可能被取消或服务器重启）"
+                    fcode = "F-LOST"
+                    item["status"] = "error"
+                    item["error"] = reason
+                    t["error"] = reason
+                    t["failure_code"] = fcode
+                    changed = True
+                elif age > estimate_timeout(t):
+                    if not in_q and not entry:
                         reason = "lost（远程队列中消失，可能被取消或服务器重启）"
                         fcode = "F-LOST"
                     else:
@@ -1779,12 +1853,13 @@ def get_status(server):
             except Exception:
                 pass
         out.append(item)
-    # 用户手动停止后，禁止自动链式推进
-    cc = state.get("chain_control") or {}
-    if not cc.get("paused"):
-        changed = advance_chain(server, state) or changed
+    # 状态查询只负责对账/下载，不在这里画分镜或交下一段（否则网页刷新会卡住）
     if changed:
         save_state(state)
+    # 第 7 步只显示当前项目，对账仍扫全部任务（别的项目也能下载）
+    if proj_name:
+        mine_ids = {t.get("id") for t in _tasks_for_current_project(state)}
+        out = [x for x in out if x.get("id") in mine_ids]
     # 排序：进行中的任务置顶（running > queued > waiting > paused > completed > error）
     def _status_rank(s):
         return {"running": 0, "queued": 1, "waiting": 2, "paused": 3, "completed": 4, "error": 5}.get(s, 6)
@@ -1793,8 +1868,9 @@ def get_status(server):
     return {
         "server_ok": True,
         "tasks": out,
-        "chain_paused": bool(cc.get("paused")),
-        "chain_pause_reason": cc.get("pause_reason") or "",
+        "project_name": proj_name,
+        "chain_paused": paused,
+        "chain_pause_reason": pause_reason,
     }
 
 
@@ -1813,7 +1889,7 @@ def _acquire_chain_lock():
     except FileExistsError:
         try:
             age = time.time() - os.path.getmtime(p)
-            if age > 180:
+            if age > 600:
                 os.remove(p)
                 return _acquire_chain_lock()
         except Exception:
@@ -1833,7 +1909,8 @@ def _release_chain_lock():
 def advance_chain(server, state):
     """链式衔接：上一段完成并下载后，抽最后一帧上传，提交下一段。"""
     cc = state.get("chain_control") or {}
-    if cc.get("paused"):
+    # 仅旧版「全局暂停」才整链停；新版按项目暂停，由内层跳过
+    if cc.get("paused") and not _project_pause_map(state):
         return False
     if not _acquire_chain_lock():
         return False
@@ -1849,6 +1926,8 @@ def _advance_chain_inner(server, state):
     by_id = {t.get("id"): t for t in tasks}
     for i, nxt in enumerate(tasks):
         if nxt.get("paused_by_user"):
+            continue
+        if _task_project_is_paused(state, nxt):
             continue
         if not nxt.get("chain_waiting") or nxt.get("prompt_id") or nxt.get("output_file") or nxt.get("downloaded"):
             continue
@@ -1866,10 +1945,24 @@ def _advance_chain_inner(server, state):
         if already:
             nxt["chain_waiting"] = False
             continue
+        # 同一片子还有一段在跑/排队，先等它做完，禁止 02 还没完就交 04
+        busy = any(
+            x is not nxt
+            and _task_title_key(x.get("name")) == nxt_key
+            and x.get("prompt_id")
+            and not x.get("output_file")
+            and not x.get("downloaded")
+            and not x.get("error")
+            for x in tasks
+        )
+        if busy:
+            continue
         # 按 chain_prev 找上一段。重生成第 N 段时，即使上一段已经接过旧版，仍用紧邻上一段末帧。
         t = by_id.get(nxt.get("chain_prev")) if nxt.get("chain_prev") else None
         if t is None and i > 0:
-            t = tasks[i - 1]
+            cand = tasks[i - 1]
+            if _task_title_key(cand.get("name")) == _task_title_key(nxt.get("name")):
+                t = cand
         if t is not None and t.get("chain_done"):
             nxt_seg = _task_seg_num(nxt.get("name"))
             prev_seg = _task_seg_num(t.get("name"))
@@ -1938,6 +2031,7 @@ def _advance_chain_inner(server, state):
                             "duration": nxt.get("duration", 10), "mp": nxt.get("mp", 1.0),
                             "prefix": nxt.get("prefix", ""), "image": chain_img,
                             "seed": random.randrange(10 ** 15),
+                            "aspect": nxt.get("aspect") or _project_aspect(state),
                         }
                         sys.path.insert(0, DEFAULT_WORKFLOW_DIR)
                         import build_api_graphs as bg
@@ -1964,6 +2058,7 @@ def _advance_chain_inner(server, state):
                     "duration": nxt.get("duration", 10), "mp": nxt.get("mp", 1.0),
                     "prefix": nxt.get("prefix", ""), "image": "",
                     "seed": random.randrange(10 ** 15),
+                    "aspect": nxt.get("aspect") or _project_aspect(state),
                 }
                 g = bg.convert_t2v(task)
                 resp = api_post(server, "/prompt", {"prompt": g, "client_id": "batch_console"})
@@ -2029,9 +2124,16 @@ def _advance_chain_inner(server, state):
                 story = story or ""
         # 用上一段真实末帧 + 角色锚点重生本段分镜（开头接末帧，人跟锚点一致）
         if use_story:
+            last_fail = float(nxt.get("bridge_fail_at") or 0)
+            if last_fail and time.time() - last_fail < 45:
+                return changed
             bridged = regen_bridge_storyboard(png, nxt, state)
-            if bridged:
-                story = bridged
+            if not bridged:
+                nxt["bridge_fail_at"] = time.time()
+                print(f"[chain] {nxt.get('name')} 衔接分镜没画成，先不交视频，约 45 秒后再试")
+                return True
+            story = bridged
+            nxt.pop("bridge_fail_at", None)
         # 第2段起视频不带角色正脸：人已画进分镜，再塞大头照会抢末帧
         _, scene_fn = _seg_identity_refs(state, nxt)
         chain_extra = [scene_fn] if scene_fn else []
@@ -2079,6 +2181,7 @@ def _advance_chain_inner(server, state):
                 "duration": nxt.get("duration", 10),
                 "mp": nxt.get("mp", 1.0),
                 "prefix": nxt.get("prefix", ""),
+                "aspect": nxt.get("aspect") or _project_aspect(state),
                 "images": ref_imgs,
                 "story_image": story,
                 "ref_video": nxt.get("ref_video"),
@@ -2107,6 +2210,7 @@ def _advance_chain_inner(server, state):
                 "story_image": nxt.get("story_image"),
                 "ref_video": nxt.get("ref_video"),
                 "seed": random.randrange(10 ** 15),
+                "aspect": nxt.get("aspect") or _project_aspect(state),
             }
             build_fn = bg.build_i2v
             submit_mode = "i2v"
@@ -2217,33 +2321,149 @@ def _project_task_prefixes(proj):
     return prefixes
 
 
+def _submitted_name_hit(task_name, submitted):
+    """已提交名单能对上（含后来自动加的 _v2）。"""
+    name = str(task_name or "")
+    for s in submitted:
+        s = str(s or "")
+        if not s:
+            continue
+        if name == s or name.startswith(s + "_v"):
+            return True
+    return False
+
+
+def _task_matches_project(task, proj):
+    """任务是否属于这个项目。"""
+    if not proj:
+        return False
+    name = str(task.get("name") or "")
+    submitted = [x for x in (proj.get("submitted_task_names") or []) if x]
+    for rec in (proj.get("generation_log") or []):
+        for s in rec.get("shots") or []:
+            if s.get("name"):
+                submitted.append(s["name"])
+    if submitted and _submitted_name_hit(name, submitted):
+        return True
+    prefixes = _project_task_prefixes(proj)
+    if prefixes and any(name.startswith(p) for p in prefixes):
+        return True
+    return False
+
+
+def _tasks_for_project(state, proj):
+    tasks = state.get("tasks") or []
+    if not proj:
+        return list(tasks)
+    hit = [t for t in tasks if _task_matches_project(t, proj)]
+    if hit:
+        return hit
+    # 已有项目名但对不上：不要把别的项目任务拿来
+    if str(proj.get("name") or "").strip():
+        return []
+    return list(tasks)
+
+
 def _tasks_for_current_project(state):
     """只拿当前项目的任务，避免断点续接误用别的项目的高版本批次。"""
-    tasks = state.get("tasks") or []
+    return _tasks_for_project(state, state.get("project") or {})
+
+
+def _project_pause_map(state):
+    """各项目是否已点停止：{项目名: 原因}。"""
+    cc = state.get("chain_control") or {}
+    raw = cc.get("paused_projects") or {}
+    out = {}
+    if isinstance(raw, dict):
+        for k, v in raw.items():
+            if not k:
+                continue
+            if isinstance(v, str):
+                out[str(k)] = v
+            elif isinstance(v, dict):
+                out[str(k)] = v.get("reason") or "已停止"
+            elif v:
+                out[str(k)] = "已停止"
+    return out
+
+
+def _set_project_paused(state, proj_name, reason):
+    """只暂停这一个项目，不设全局 paused。"""
+    cc = dict(state.get("chain_control") or {})
+    paused = dict(cc.get("paused_projects") or {})
+    name = str(proj_name or "").strip()
+    if name:
+        paused[name] = reason or "用户点击停止"
+    cc["paused_projects"] = paused
+    cc["paused"] = False
+    cc["pause_reason"] = reason or ""
+    state["chain_control"] = cc
+
+
+def _clear_project_paused(state, proj_name):
+    """清掉当前项目的停止标记。"""
+    cc = dict(state.get("chain_control") or {})
+    paused = dict(cc.get("paused_projects") or {})
+    name = str(proj_name or "").strip()
+    if name:
+        paused.pop(name, None)
+    cc["paused_projects"] = paused
+    cc["paused"] = False
+    cc["pause_reason"] = ""
+    state["chain_control"] = cc
+
+
+def _task_project_is_paused(state, task):
+    """这段是否属于一个已点停止的项目。"""
+    cc = state.get("chain_control") or {}
+    paused_map = _project_pause_map(state)
+    if cc.get("paused") and not paused_map:
+        return True
+    if not paused_map:
+        return False
+    projects = dict(state.get("projects") or {})
+    cur = state.get("project") or {}
+    if cur.get("name"):
+        projects[cur["name"]] = cur
+    name = str(task.get("name") or "")
+    for pname in paused_map:
+        proj = projects.get(pname) or {"name": pname}
+        if _task_matches_project(task, proj):
+            return True
+        if name.startswith(str(pname) + "_"):
+            return True
+    return False
+
+
+def _current_project_pause(state):
+    """当前打开的项目是否已停止。返回 (是否暂停, 原因)。"""
     proj = state.get("project") or {}
-    submitted = set(proj.get("submitted_task_names") or [])
-    if submitted:
-        hit = [t for t in tasks if t.get("name") in submitted]
-        if hit:
-            return hit
-    prefixes = _project_task_prefixes(proj)
-    if prefixes:
-        hit = [
-            t for t in tasks
-            if any(str(t.get("name") or "").startswith(p) for p in prefixes)
-        ]
-        if hit:
-            return hit
-    return tasks
+    name = str(proj.get("name") or "").strip()
+    cc = state.get("chain_control") or {}
+    paused_map = _project_pause_map(state)
+    if name and name in paused_map:
+        return True, paused_map[name] or "用户点击停止"
+    if cc.get("paused") and not paused_map:
+        return True, cc.get("pause_reason") or "生成已暂停"
+    return False, ""
 
 
 def stop_generation(server=None):
-    """停止：打断云端 + 清空队列 + 停链式守护；已完成保留，未完成标记可续接。"""
+    """停止当前项目：只暂停本项目未完成段；其他项目继续跑。"""
     server = (server or "").strip() or DEFAULT_SERVER
-    cloud = {"interrupt": None, "clear": None}
+    cloud = {"interrupt": None, "delete": []}
+    state = load_state()
+    proj = state.get("project") or {}
+    proj_name = str(proj.get("name") or "").strip()
+    mine = _tasks_for_current_project(state)
+    mine_ids = {t.get("id") for t in mine}
+    ours_pids = {
+        t.get("prompt_id") for t in mine
+        if t.get("prompt_id") and not _task_done(t)
+    }
 
     def _post_empty_ok(path, payload=None):
-        """ComfyUI /interrupt、/queue clear 常返回空 body，不能按 JSON 解析。"""
+        """ComfyUI /interrupt、/queue 常返回空 body，不能按 JSON 解析。"""
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(
             server + path, data=data or b"{}", method="POST",
@@ -2256,33 +2476,92 @@ def stop_generation(server=None):
         except Exception as e:
             return str(e)
 
-    cloud["interrupt"] = _post_empty_ok("/interrupt", {})
-    cloud["clear"] = _post_empty_ok("/queue", {"clear": True})
-    _kill_named_process("chain_daemon")
-    state = load_state()
+    running_pid = None
+    try:
+        q = api_get(server, "/queue", timeout=8)
+        running = q.get("queue_running") or []
+        if running:
+            running_pid = running[0][1]
+    except Exception as e:
+        cloud["queue_err"] = str(e)
+
+    # 只打断本项目正在跑的那段，不清整队（避免误停别的项目）
+    if running_pid and running_pid in ours_pids:
+        cloud["interrupt"] = _post_empty_ok("/interrupt", {})
+    else:
+        cloud["interrupt"] = "skip"
+    for pid in ours_pids:
+        if pid:
+            cloud["delete"].append(pid)
+            _post_empty_ok("/queue", {"delete": [pid]})
+
+    others_need_daemon = False
+    for t in state.get("tasks") or []:
+        if t.get("id") in mine_ids or t.get("paused_by_user"):
+            continue
+        waiting = bool(t.get("chain_waiting") and not t.get("prompt_id"))
+        running = bool(t.get("prompt_id") and not _task_done(t) and not t.get("error"))
+        if waiting or running:
+            others_need_daemon = True
+            break
+    if not others_need_daemon:
+        _kill_named_process("chain_daemon")
+
     paused_names = []
     for t in state.get("tasks", []):
+        if t.get("id") not in mine_ids:
+            continue
         if _task_done(t):
             continue
         for k in ("prompt_id", "submitted_at", "error", "failure_code"):
             t.pop(k, None)
         t["chain_waiting"] = False
         t["paused_by_user"] = True
+        t.pop("bridge_fail_at", None)
         paused_names.append(t.get("name"))
-    state["chain_control"] = {
-        "paused": True,
-        "pause_reason": "用户点击停止",
-        "last_cloud_fail_at": time.time(),
-        "cloud_ok_since": 0,
-    }
+    if proj_name:
+        _set_project_paused(state, proj_name, "用户点击停止")
+    else:
+        state["chain_control"] = {
+            "paused": True,
+            "pause_reason": "用户点击停止",
+            "last_cloud_fail_at": time.time(),
+            "cloud_ok_since": 0,
+            "paused_projects": {},
+        }
     save_state(state)
+    extra = "其他项目仍在继续。" if others_need_daemon else ""
     return {
         "ok": True,
         "cloud": cloud,
         "paused_count": len(paused_names),
         "paused_names": paused_names,
-        "message": f"已停止。未完成 {len(paused_names)} 段已暂停，已完成视频保留。可点「从断点继续」。",
+        "message": (
+            f"已停止当前项目。未完成 {len(paused_names)} 段已暂停，已完成视频保留。"
+            f"{extra}可点「从断点继续」。"
+        ),
     }
+
+
+def _cloud_prompt_exists(server, pid):
+    """云端队列或 history 里还有这个任务号（在跑/已完成/失败都算还在）。"""
+    pid = str(pid or "").strip()
+    if not pid:
+        return False
+    try:
+        q = api_get(server, "/queue", timeout=8)
+        active = {x[1] for x in (q.get("queue_running") or [])} | {x[1] for x in (q.get("queue_pending") or [])}
+        if pid in active:
+            return True
+    except Exception:
+        return True
+    try:
+        h = api_get(server, "/history/" + pid, timeout=8)
+        if h and h.get(pid):
+            return True
+    except Exception:
+        return True
+    return False
 
 
 def resume_from_breakpoint(server=None):
@@ -2320,20 +2599,30 @@ def resume_from_breakpoint(server=None):
             t["chain_done"] = False
             t.pop("paused_by_user", None)
         else:
+            pid = t.get("prompt_id")
+            # 已经交到云端且任务还在（在跑或已出片）：不要清任务号，否则本地对不上已完成视频
+            if pid and not t.get("error") and _cloud_prompt_exists(server, pid):
+                t.pop("paused_by_user", None)
+                t["chain_waiting"] = False
+                t.pop("bridge_fail_at", None)
+                continue
             for k in ("prompt_id", "submitted_at", "error", "failure_code", "output_file", "downloaded", "recorded"):
                 t.pop(k, None)
             t["chain_waiting"] = True
             t["paused_by_user"] = False
-            t["chain_prev"] = batch[i - 1].get("id")
+            t.pop("bridge_fail_at", None)
+            # 每段只挂紧邻上一段，避免 03/04 都挂到已完成段然后同时开跑
+            t["chain_prev"] = batch[i - 1].get("id") if i > 0 else batch[last_done_i].get("id")
             if not t.get("chain_style"):
                 t["chain_style"] = state.get("chain_style") or "frame_story"
 
-    state["chain_control"] = {
-        "paused": False,
-        "pause_reason": "",
-        "last_cloud_fail_at": 0,
-        "cloud_ok_since": time.time(),
-    }
+    _clear_project_paused(state, str((state.get("project") or {}).get("name") or ""))
+    cc = dict(state.get("chain_control") or {})
+    cc["paused"] = False
+    cc["pause_reason"] = ""
+    cc["last_cloud_fail_at"] = 0
+    cc["cloud_ok_since"] = time.time()
+    state["chain_control"] = cc
     changed = advance_chain(server, state)
     save_state(state)
     daemon_pid = _ensure_chain_daemon()
@@ -3082,7 +3371,7 @@ STORY_PROMPT_SYSTEM = """你是爆款短剧分镜画师兼文生图提示词专�
 2. 角色形象：每个在场角色严格保持角色设定（性别/年龄/发型/服装），一字不差
 3. 情节动作：本段核心动作，具体可拍：谁、做什么、怎么动
 4. 情绪氛围：把情绪转成视觉（光线冷暖、色调、气氛词、构图松紧），禁止抽象情绪词
-5. 构图：按运镜给出画面构图（特写/中近景/双人同框/远景），竖构图 3:4
+5. 构图：按运镜给出画面构图（特写/中近景/双人同框/远景）；竖屏用竖构图 9:16，横屏用横构图 16:9
 6. 风格：1980s 中国乡村，电影感单帧分镜，写实，胶片质感
 7. 画面必须是一张完整的单一电影画面，只拍一个瞬间；禁止四格、连环画、漫画分格、拼图、同一张图里多个小画面
 8. 负面约束（必须保留）：画面中严格只有 N 个剧本角色，无第三人、无多余的肢体/手臂/手从画面外伸入，每人四肢完整各两只手、手指清晰不粘连，服装道具正常无穿帮，无文字乱码，无现代物品，无塑料包装盒，无饮料瓶
@@ -3247,12 +3536,22 @@ def _extract_json_obj(out):
             return None
 
 
-def llm_generate_script(topic, style="", segments=10, token=""):
+def llm_generate_script(topic, style="", segments=10, token="", genre="", budget_sec=0):
     """剧情梗概 → AI 生成完整剧本（role_list + storyboard_list）。"""
+    extra = []
+    if genre:
+        extra.append(f"类型：{genre}")
+    try:
+        sec = int(float(budget_sec or 0))
+    except Exception:
+        sec = 0
+    if sec > 0:
+        extra.append(f"全片总时长约 {sec} 秒，各段 duration 相加尽量接近这个数")
     user = (
         f"题材/梗概：{topic or ''}\n"
         f"风格要求：{style or '怀旧温情、1980s 中国乡村校园'}\n"
-        f"段数：{segments} 段左右\n"
+        + ("".join(x + "\n" for x in extra))
+        + f"段数：{segments} 段左右\n"
         "请创作完整剧本 JSON。"
     )
     resp = lmstudio_chat([
@@ -5307,6 +5606,11 @@ class Handler(BaseHTTPRequestHandler):
             topic = body.get("topic", "")
             style = body.get("style", "")
             segments = int(body.get("segments") or 10)
+            genre = str(body.get("genre") or "").strip()
+            try:
+                budget_sec = int(float(body.get("budget_sec") or 0))
+            except Exception:
+                budget_sec = 0
             token = _lm_token(body)
             if body.get("lmstudio_token"):
                 st = load_state()
@@ -5316,7 +5620,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": "请填写剧情梗概/题材"}, ensure_ascii=False))
                 return
             try:
-                script = llm_generate_script(topic, style, segments, token)
+                script = llm_generate_script(topic, style, segments, token, genre=genre, budget_sec=budget_sec)
             except Exception as e:
                 self._send(400, json.dumps({"error": f"剧本生成失败：{e}"}, ensure_ascii=False))
                 return
@@ -5572,11 +5876,12 @@ class Handler(BaseHTTPRequestHandler):
                     "场景和人物接着上一段，只画本段进行中的一个瞬间。"
                     "必须是单一完整电影画面，禁止四格、连环画、分格、拼图。\n"
                 )
+            frame = _frame_hint(aspect=str(body.get("aspect") or ""))
             user = (
                 "根据下面这个分镜生成分镜图提示词："
                 + extra
-                + "\n"
-                + json.dumps({"storyboard": sb, "roles": roles, "index": idx}, ensure_ascii=False, indent=1)
+                + f"\n构图要求：{frame}，必须是一张完整的单一电影画面。\n"
+                + json.dumps({"storyboard": sb, "roles": roles, "index": idx, "aspect": frame}, ensure_ascii=False, indent=1)
             )
             try:
                 # 只走当前配置的主端点，60 秒超时；失败立刻返回，不再降级死等本地模型

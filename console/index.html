@@ -209,6 +209,12 @@
   .proj-bar { flex: 0 0 150px; height: 2px; background: var(--line); overflow: hidden; }
   .proj-bar span { display: block; height: 100%; background: var(--text); }
   .proj-prog-label { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .suggest { display: flex; flex-wrap: wrap; gap: 10px 14px; margin: -8px 0 16px; }
+  .suggest-btn {
+    background: none; border: none; border-bottom: 1px solid var(--line);
+    padding: 2px 0; font-size: 12px; color: var(--muted); cursor: pointer;
+  }
+  .suggest-btn:hover { color: var(--text); border-bottom-color: var(--text); }
   .proj-actions { flex-shrink: 0; }
   @media (max-width: 800px) {
     header, .steps, main { padding-left: 18px; padding-right: 18px; }
@@ -236,22 +242,44 @@
   <section class="panel" id="panel-1">
     <div class="card">
       <h2>创建项目 <span class="step-tag">第 1 步</span></h2>
-      <div class="desc">先建项目，后面每一步的成果都会挂在这个项目下。</div>
+      <div class="desc">先建项目，后面每一步的成果都会挂在这个项目下。类型可自己填；画幅会传到出片；总时长按秒填写。</div>
       <div class="grid">
         <label class="field">项目名 <input type="text" id="projectName" placeholder="如：麦田告白"></label>
         <label class="field">类型
-          <select id="projectType"><option>青春短剧</option><option>都市情感</option><option>悬疑剧情</option><option>产品解说</option><option>数字人口播</option></select>
+          <input type="text" id="projectType" list="projectTypeHints" placeholder="如：都市情感、古装权谋">
+          <datalist id="projectTypeHints">
+            <option value="青春短剧"></option>
+            <option value="都市情感"></option>
+            <option value="悬疑剧情"></option>
+            <option value="古装权谋"></option>
+            <option value="产品解说"></option>
+            <option value="数字人口播"></option>
+          </datalist>
         </label>
         <label class="field">画幅
-          <select id="projectAspect"><option>竖版 1080×1920</option><option>横版 1920×1080</option></select>
+          <select id="projectAspect">
+            <option value="竖版 1080×1920">竖版 1080×1920（9:16）</option>
+            <option value="横版 1920×1080">横版 1920×1080（16:9）</option>
+          </select>
         </label>
-        <label class="field">总时长预算
-          <select id="projectBudget"><option>1 分钟</option><option>1-3 分钟</option><option>3-5 分钟</option><option>5 分钟以上</option></select>
+        <label class="field">总时长（秒）
+          <input type="number" id="projectBudget" min="5" step="1" value="60" placeholder="60">
         </label>
       </div>
+      <div class="suggest" id="typeSuggest">
+        <button type="button" class="suggest-btn" data-fill="projectType" data-value="青春短剧">青春短剧</button>
+        <button type="button" class="suggest-btn" data-fill="projectType" data-value="都市情感">都市情感</button>
+        <button type="button" class="suggest-btn" data-fill="projectType" data-value="悬疑剧情">悬疑剧情</button>
+        <button type="button" class="suggest-btn" data-fill="projectType" data-value="古装权谋">古装权谋</button>
+        <button type="button" class="suggest-btn" data-fill="projectType" data-value="产品解说">产品解说</button>
+        <button type="button" class="suggest-btn" data-fill="projectBudget" data-value="30">30秒</button>
+        <button type="button" class="suggest-btn" data-fill="projectBudget" data-value="60">60秒</button>
+        <button type="button" class="suggest-btn" data-fill="projectBudget" data-value="90">90秒</button>
+        <button type="button" class="suggest-btn" data-fill="projectBudget" data-value="120">120秒</button>
+      </div>
       <div class="row">
-        <button class="btn primary" id="btnCreateProject">创建项目 →</button>
-        <button class="btn ghost" id="btnNewProject">＋ 新建项目</button>
+        <button class="btn primary" id="btnCreateProject">保存项目</button>
+        <button class="btn ghost" id="btnNewProject">清空重填</button>
         <button class="btn blue" id="btnToScript" style="display:none">下一步：脚本生成 →</button>
         <span class="hint" id="projectHint"></span>
       </div>
@@ -398,7 +426,7 @@
   <section class="panel" id="panel-7">
     <div class="card">
       <h2>提交生成 <span class="step-tag">第 7 步</span></h2>
-      <div class="desc">勾选链式衔接则上段末帧自动接下一段首帧；可用停止/从断点继续，不会覆盖已完成视频。</div>
+      <div class="desc">勾选链式衔接则上段末帧自动接下一段首帧；停止/从断点继续只作用于当前项目，不会覆盖已完成视频。</div>
       <div class="row">
         <label style="font-size:13px"><input type="checkbox" id="chainMode"> 🔗 链式衔接（上段末帧 → 下段首帧）</label>
         <label id="chainStyleWrap" style="font-size:13px;display:none">衔接方式
@@ -789,6 +817,30 @@ function toastClear() { clearTimeout(toastTimer); $('toast').style.display = 'no
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+function parseBudgetSeconds(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return 60;
+  const n = parseFloat(s);
+  if (/秒/.test(s) && isFinite(n)) return Math.max(5, Math.round(n));
+  if (/分钟|分/.test(s)) {
+    if (s.includes('1-3')) return 180;
+    if (s.includes('3-5')) return 300;
+    if (/5\s*分钟以上/.test(s)) return 360;
+    if (isFinite(n)) return Math.max(5, Math.round(n * 60));
+  }
+  if (isFinite(n) && n > 0) return Math.max(5, Math.round(n));
+  return 60;
+}
+function formatBudgetLabel(v) {
+  return parseBudgetSeconds(v) + '秒';
+}
+function projectBudgetSec() {
+  return parseBudgetSeconds($('projectBudget') && $('projectBudget').value);
+}
+function projectFrameHint() {
+  const a = ($('projectAspect') && $('projectAspect').value) || '';
+  return /横|16:9|1920/.test(a) ? '横构图 16:9' : '竖构图 9:16';
+}
 function escAttr(s) { return esc(s); }
 
 // ---------- ① 创建项目 ----------
@@ -799,9 +851,9 @@ async function createProject() {
   // 点击创建项目 = 直接新建，不继承任何旧项目数据
   const payload = {
     name,
-    type: $('projectType').value,
+    type: $('projectType').value.trim(),
     aspect: $('projectAspect').value,
-    budget: $('projectBudget').value,
+    budget: formatBudgetLabel($('projectBudget').value),
     fresh: true,
   };
   const r = await fetch('/api/project', {
@@ -813,7 +865,7 @@ async function createProject() {
   currentProjectName = p.name || '';
   resetWorkData();
   $('projectChip').textContent = `${p.name || ''} · ${p.type || ''} · ${p.aspect || ''}`;
-  $('projectHint').textContent = '✅ 新项目已创建，已显示在下方项目库；可继续下一步：脚本生成';
+  $('projectHint').textContent = '✅ 项目已保存，已显示在下方项目库；可继续下一步：脚本生成';
   $('btnToScript').style.display = 'inline-block';
   await renderProjects();
 }
@@ -850,10 +902,10 @@ async function renderProjects() {
       <div class="proj-item${p.current ? ' cur' : ''}">
         <div class="proj-main">
           <div class="proj-name">${esc(p.name)}${p.current ? '<span class="proj-cur">当前</span>' : ''}</div>
-          <div class="proj-meta">${esc(p.type || '')} · ${esc(p.aspect || '')} · ${esc(p.budget || '')} · ${esc(p.updated_at || '')}</div>
+          <div class="proj-meta">${esc(p.type || '未填类型')} · ${esc(p.aspect || '')} · ${esc(formatBudgetLabel(p.budget))} · ${esc(p.updated_at || '')}</div>
           <div class="proj-progress">
             <span class="proj-bar"><span style="width:${Math.max(3, ((p.progress || 0) + 1) / 7 * 100)}%"></span></span>
-            <span class="proj-prog-label">进度 ${Math.min((p.progress || 0) + 1, 7)}/7 · ${PROGRESS_LABELS[p.progress || 0]}${p.prompt_total ? ` · 提示词 ${p.prompt_done || 0}/${p.prompt_total} 段` : ''}${p.seg_total ? ` · 已出片 ${p.seg_done || 0}/${p.seg_total} 段` : ''}</span>
+            <span class="proj-prog-label">${PROGRESS_LABELS[p.progress || 0]}${p.prompt_total ? ` · 提示词 ${p.prompt_done || 0}/${p.prompt_total} 段` : ''}${p.seg_total ? ` · 视频 ${p.seg_done || 0}/${p.seg_total} 段` : ''}</span>
           </div>
         </div>
         <div class="proj-actions">
@@ -891,9 +943,9 @@ function autoSaveProject(silent) {
     try {
       const payload = {
         name: $('projectName').value.trim() || '未命名项目',
-        type: $('projectType').value,
+        type: $('projectType').value.trim(),
         aspect: $('projectAspect').value,
-        budget: $('projectBudget').value,
+        budget: formatBudgetLabel($('projectBudget').value),
         current_script: currentScript,
         script_before: scriptBefore,
         script_after: scriptAfter,
@@ -958,7 +1010,14 @@ async function generateScript() {
   try {
     const r = await fetch('/api/generate_script', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({topic, style: $('styleInput').value, segments: parseInt($('segmentsInput').value) || 10, lmstudio_token: $('lmToken').value.trim()}),
+      body: JSON.stringify({
+      topic,
+      style: $('styleInput').value,
+      segments: parseInt($('segmentsInput').value) || 10,
+      genre: ($('projectType') && $('projectType').value.trim()) || '',
+      budget_sec: projectBudgetSec(),
+      lmstudio_token: $('lmToken').value.trim(),
+    }),
     });
     const d = await r.json();
     if (!r.ok) { toast(d.error || '生成失败', true); return; }
@@ -1480,13 +1539,24 @@ async function refreshStatus() {
     const r = await fetch(`/api/status?server=${encodeURIComponent(server)}`);
     const d = await r.json();
     if (!d.server_ok) { statusCardsFp = ''; $('statusCards').innerHTML = '<div class="empty">⚠️ 服务器连接异常</div>'; return; }
-    if (!d.tasks.length) { statusCardsFp = ''; $('statusCards').innerHTML = '<div class="empty"><div class="big">🎬</div>还没有任务，提交后这里显示状态</div>'; return; }
+    const pname = d.project_name || ($('projectName') && $('projectName').value.trim()) || '';
+    if (!d.tasks.length) {
+      statusCardsFp = '';
+      const who = pname ? `当前项目「${esc(pname)}」` : '当前项目';
+      $('statusCards').innerHTML = `<div class="empty"><div class="big">🎬</div>${who}还没有任务，提交后这里显示状态</div>`;
+      if ($('chainPauseHint')) { $('chainPauseHint').style.display = 'none'; }
+      return;
+    }
     statusTasksCache = d.tasks;
     const hint = $('chainPauseHint');
     if (hint) {
+      const bridge = (d.tasks || []).find(t => t.bridge_fail || (t.status === 'waiting' && t.error && String(t.error).includes('衔接分镜')));
       if (d.chain_paused) {
         hint.style.display = '';
-        hint.textContent = '⏹ 已停止：' + (d.chain_pause_reason || '生成已暂停') + '。点「从断点继续」可接着跑，不会覆盖已完成段。';
+        hint.textContent = '⏹ 已停止当前项目：' + (d.chain_pause_reason || '生成已暂停') + '。点「从断点继续」可接着跑，不会覆盖已完成段。其他项目不受影响。';
+      } else if (bridge) {
+        hint.style.display = '';
+        hint.textContent = '⚠️ ' + (bridge.name || '') + '：衔接分镜没画成，约 45 秒后再试（不会用旧分镜）。';
       } else {
         hint.style.display = 'none';
         hint.textContent = '';
@@ -1505,7 +1575,7 @@ function renderStatusCards() {
   const show = tasks.slice(statusPage * statusPageSize, (statusPage + 1) * statusPageSize);
   const fp = JSON.stringify(show.map(t => ({
     id: t.id, status: t.status, downloaded: t.downloaded, error: t.error,
-    outputs: t.outputs, fc: t.failure_code, name: t.name,
+    outputs: t.outputs, fc: t.failure_code, name: t.name, bf: t.bridge_fail,
   })));
   // 状态没变就只改耗时，避免 8 秒刷新把已有预览拆掉变成黑屏
   if (fp === statusCardsFp && $('statusCards').querySelector('[data-task-id]')) {
@@ -1932,7 +2002,7 @@ async function clearHistory() {
 }
 
 async function stopGeneration() {
-  if (!confirm('确定停止当前生成？\n\n会打断云端任务并停止自动续接。\n已完成的视频会保留，之后可「从断点继续」。')) return;
+  if (!confirm('确定停止当前项目的生成？\n\n只停这个项目，其他项目不受影响。\n已完成的视频会保留，之后可「从断点继续」。')) return;
   const btn = $('btnStopGen');
   btn.disabled = true;
   try {
@@ -1949,7 +2019,7 @@ async function stopGeneration() {
 }
 
 async function resumeChain() {
-  if (!confirm('从断点继续？\n\n会从最新批次「最后一个已完成段」往后接着跑，\n不会覆盖已经生成好的视频。')) return;
+  if (!confirm('从断点继续当前项目？\n\n会从本项目最新批次「最后一个已完成段」往后接着跑，\n不会覆盖已经生成好的视频。')) return;
   const btn = $('btnResumeChain');
   btn.disabled = true;
   try {
@@ -2155,7 +2225,7 @@ async function loadProject() {
       $('projectChip').textContent = `${p.name} · ${p.type||''} · ${p.aspect||''}`;
       if (p.type) $('projectType').value = p.type;
       if (p.aspect) $('projectAspect').value = p.aspect;
-      if (p.budget) $('projectBudget').value = p.budget;
+      if (p.budget) $('projectBudget').value = parseBudgetSeconds(p.budget);
     }
     // 恢复工作数据
     if (p.script_before) scriptBefore = p.script_before;
@@ -2522,7 +2592,7 @@ function defaultStoryPrompt(i) {
     return `${n}（${bits || r.role_desc || ''}）`;
   }).join('；');
   const roleLine = roleDesc ? `画面人物形象必须与角色设定一致：${roleDesc}。` : '';
-  return (bridge ? bridge : '') + p + `电影感单帧分镜图，竖构图，${projectEraZh()}风格，写实。必须是一张完整的单一电影画面，禁止四格、连环画、漫画分格。${roleLine}`
+  return (bridge ? bridge : '') + p + `电影感单帧分镜图，${projectFrameHint()}，${projectEraZh()}风格，写实。必须是一张完整的单一电影画面，禁止四格、连环画、漫画分格。${roleLine}`
     + `人物外貌必须与提供的角色锚点参考图完全同一人（五官、发型、服装），参考图只提供外貌，姿势构图按本段情节。`
     + `画面中严格只有剧本出现的 ${Math.max((currentScript.storyboard_list || [])[i] && ((currentScript.storyboard_list || [])[i].roles || []).length || 0, 1)} 个人，`
     + `绝对没有额外人物、没有多余的肢体/手臂/手从画面外伸入，每人四肢完整、各两只手、手指清晰不粘连，`
@@ -2638,12 +2708,13 @@ async function genSceneImg(i) {
   finally { btn.disabled = false; btn.textContent = '🖼️ 生成'; }
 }
 
-async function buildStoryPrompt(i) {
-  // 第 2 段起强制带上一段结尾；重新生成也会重写提示词（旧海报提示不能留）
+async function buildStoryPrompt(i, opts) {
+  // 重新生成：卡片里已有提示词就沿用，只重画图，不改词
+  const forceNew = !!(opts && opts.forceNew);
   let prompt = defaultStoryPrompt(i);
   const ta = document.querySelector(`.asset-prompt[data-kind="story"][data-key="${i}"]`);
-  const keepOld = i === 0 && ta && ta.value.trim() && !$('storyAiPrompt').checked;
-  if (keepOld) return ta.value.trim();
+  const existing = ta && ta.value.trim();
+  if (existing && !forceNew) return existing;
   if ($('storyAiPrompt') && $('storyAiPrompt').checked) {
     try {
       const sb = (currentScript.storyboard_list || [])[i] || {};
@@ -2662,6 +2733,7 @@ async function buildStoryPrompt(i) {
           roles,
           index: i,
           prev_storyboard: prev,
+          aspect: ($('projectAspect') && $('projectAspect').value) || '',
           lmstudio_token: $('lmToken').value.trim(),
         }),
         signal: ac.signal,
@@ -2710,7 +2782,9 @@ function clearStoryImg(i) {
 }
 
 async function genStoryImg(i) {
-  toastLoading(`🤖 正在生成分镜 ${i + 1} 提示词…`);
+  const ta = document.querySelector(`.asset-prompt[data-kind="story"][data-key="${i}"]`);
+  const hasPrompt = !!(ta && ta.value.trim());
+  if (!hasPrompt) toastLoading(`🤖 正在生成分镜 ${i + 1} 提示词…`);
   let prompt = await buildStoryPrompt(i);
   assetPrompts.story[i] = prompt;
   const btn = event.target; btn.disabled = true; btn.textContent = '生成中…';
@@ -2722,7 +2796,10 @@ async function genStoryImg(i) {
     autoSaveProject(true);
     toast(`✅ 分镜 ${i + 1} 图已生成`);
   } catch (e) { toast(e.message, true); }
-  finally { btn.disabled = false; btn.textContent = '🎬 生成分镜图'; }
+  finally {
+    btn.disabled = false;
+    btn.textContent = assetImgs.story[i] ? '🔄 重新生成' : '🎬 生成分镜图';
+  }
 }
 
 function setRoleGender(i, g) {
@@ -2982,12 +3059,19 @@ $('drawerBg').addEventListener('click', closeDrawer);
 $('btnCreateProject').addEventListener('click', createProject);
 $('btnNewProject').addEventListener('click', () => {
   $('projectName').value = '';
-  $('projectType').value = '青春短剧';
+  $('projectType').value = '';
   $('projectAspect').value = '竖版 1080×1920';
-  $('projectBudget').value = '1 分钟';
+  $('projectBudget').value = 60;
   resetWorkData();
   $('btnToScript').style.display = 'none';
-  $('projectHint').textContent = '已新建空白项目，输入项目名后点「创建项目」';
+  $('projectHint').textContent = '表单已清空，输入项目名后点「保存项目」';
+});
+document.querySelectorAll('.suggest-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const id = btn.getAttribute('data-fill');
+    const val = btn.getAttribute('data-value');
+    if (id && $(id)) $(id).value = val;
+  });
 });
 $('btnToScript').addEventListener('click', () => goStep(2));
 $('btnGenScript').addEventListener('click', generateScript);

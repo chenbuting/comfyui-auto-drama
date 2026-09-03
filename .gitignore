@@ -16,6 +16,9 @@ console/*.err.log
 console/batch_records.csv
 console/batch_records.md
 console/__pycache__/
+console/chain.lock
+console/_resubmit_once.py
+console/_frame_compare/
 *.pyc
 .playwright-cli/
 

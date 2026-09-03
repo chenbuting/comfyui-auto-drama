@@ -5,7 +5,7 @@
 用法（后台运行，关掉终端也不停）：
     nohup python3 chain_daemon.py > chain_daemon.log 2>&1 &
 
-逻辑：每 20 秒调用一次 get_status（内部含 advance_chain 自动推进），
+逻辑：每 20 秒先 get_status（对账/下载），再 advance_chain 推进下一段。
 上一段完成即自动抽帧上传、提交下一段，直到所有任务结束。
 """
 
@@ -32,6 +32,10 @@ def main():
             if not result.get("server_ok"):
                 print(f"[daemon] 服务器异常：{result.get('error')}", flush=True)
             else:
+                st = bc.load_state()
+                # 按项目暂停：某个项目停了仍推进其他项目
+                if bc.advance_chain(server, st):
+                    bc.save_state(st)
                 active = [t for t in result["tasks"] if t["status"] in ("queued", "running", "waiting")]
                 done = [t for t in result["tasks"] if t["status"] == "completed"]
                 brief = ", ".join(
